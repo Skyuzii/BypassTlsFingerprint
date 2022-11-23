@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net6.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <Reference Include="BouncyCastle.Crypto">
+        <HintPath>..\..\bc-csharp\crypto\src\bin\Debug\net6.0\BouncyCastle.Crypto.dll</HintPath>
+      </Reference>
+    </ItemGroup>
+
+</Project>
