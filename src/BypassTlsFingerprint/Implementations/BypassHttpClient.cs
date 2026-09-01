@@ -2,25 +2,25 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 
-using BypassTlsFingerprint.Abstracts;
-using BypassTlsFingerprint.Constants;
-using BypassTlsFingerprint.Extensions;
-using BypassTlsFingerprint.Models;
-using BypassTlsFingerprint.Parsers;
+using BypassTlsFingerprint.Abstractions;
+using BypassTlsFingerprint.Implementations.Constants;
+using BypassTlsFingerprint.Implementations.Extensions;
+using BypassTlsFingerprint.Implementations.Models;
+using BypassTlsFingerprint.Implementations.Parsers;
 
 using Org.BouncyCastle.Tls;
 
-namespace BypassTlsFingerprint;
+namespace BypassTlsFingerprint.Implementations;
 
 public sealed class BypassHttpClient
 {
     private readonly BrowserTlsClient _tlsClient;
-    private readonly HttpParser _httpParser = new();
+    private readonly HttpParser _httpParser = new HttpParser();
 
     public bool DisableRedirect { get; set; }
     public HttpMethod Method { get; set; } = HttpMethod.Get;
 
-    public CookieCollection Cookies { get; set; } = new();
+    public CookieCollection Cookies { get; set; } = new CookieCollection();
 
     public string? ProxyHost { get; set; }
 
@@ -28,7 +28,7 @@ public sealed class BypassHttpClient
 
     public string UserAgent { get; set; }
 
-    public Dictionary<string, string> Headers { get; set; } = new();
+    public Dictionary<string, string> Headers { get; set; } = new Dictionary<string, string>();
 
 
     public BypassHttpClient(BrowserTlsClient tlsClient)
@@ -38,15 +38,15 @@ public sealed class BypassHttpClient
 
     public async Task<HttpResponse> GetResponse(string url)
     {
-        var response = await GetResponseInternal(url);
-        var httpResponse = await _httpParser.ParseHttpResponse(response);
+        string response = await GetResponseInternal(url);
+        HttpResponse httpResponse = await _httpParser.ParseHttpResponse(response);
 
         foreach (Cookie cookie in httpResponse.Cookies)
         {
             Cookies.Add(cookie);
         }
 
-        if (DisableRedirect || !httpResponse.Headers.TryGetValue("Location", out var location))
+        if (DisableRedirect || !httpResponse.Headers.TryGetValue("Location", out string? location))
         {
             return httpResponse;
         }
@@ -56,7 +56,7 @@ public sealed class BypassHttpClient
 
     public async Task<string?> GetResponseString(string url)
     {
-        var httpResponse = await GetResponse(url);
+        HttpResponse httpResponse = await GetResponse(url);
         return httpResponse.Content;
     }
 
@@ -71,12 +71,12 @@ public sealed class BypassHttpClient
 
         try
         {
-            using var client = CreateTcpClient(uri.Host, 443, ProxyHost, ProxyPort);
+            using TcpClient client = CreateTcpClient(uri.Host, port: 443, ProxyHost, ProxyPort);
             protocol = new TlsClientProtocol(client.GetStream());
             protocol.Connect(_tlsClient);
 
-            var buildRequestBody = BuildRequestBody(url, uri.Host);
-            var dataToSend = Encoding.UTF8.GetBytes(buildRequestBody);
+            string buildRequestBody = BuildRequestBody(url, uri.Host);
+            byte[] dataToSend = Encoding.UTF8.GetBytes(buildRequestBody);
             await protocol.Stream.WriteAsync(dataToSend);
 
             return ReadResponse(protocol.Stream);
@@ -119,13 +119,13 @@ public sealed class BypassHttpClient
         var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
         socket.Connect(proxyHost, proxyPort.Value);
 
-        var connectMessage = Encoding.UTF8.GetBytes($"CONNECT {host}:{port} HTTP/1.1{Environment.NewLine}{Environment.NewLine}");
+        byte[] connectMessage = Encoding.UTF8.GetBytes($"CONNECT {host}:{port} HTTP/1.1{Environment.NewLine}{Environment.NewLine}");
         socket.Send(connectMessage);
 
         var receiveBuffer = new byte[1024];
-        var received = socket.Receive(receiveBuffer);
+        int received = socket.Receive(receiveBuffer);
 
-        var response = Encoding.UTF8.GetString(receiveBuffer, 0, received);
+        string response = Encoding.UTF8.GetString(receiveBuffer, index: 0, received);
         if (!response.Contains("200"))
         {
             throw new Exception($"Ошибка подключения к прокси серверу {proxyHost}:{proxyPort}. Ответ: {response}");
@@ -139,17 +139,17 @@ public sealed class BypassHttpClient
 
     private string BuildRequestBody(string url, string hostName)
     {
-        var hdr = new StringBuilder()
+        StringBuilder hdr = new StringBuilder()
             .AppendLine($"{Method} {url} HTTP/1.1")
             .AppendLine($"Host: {hostName}")
             .AppendLine("Connection: close");
 
-        foreach (var header in Headers)
+        foreach (KeyValuePair<string, string> header in Headers)
         {
             hdr.AppendLine($"{header.Key}: {header.Value}");
         }
 
-        var cookieString = Cookies
+        string cookieString = Cookies
             .Select(x => $"{x.Name}={x.Value}")
             .ToList()
             .JoinToString("; ");

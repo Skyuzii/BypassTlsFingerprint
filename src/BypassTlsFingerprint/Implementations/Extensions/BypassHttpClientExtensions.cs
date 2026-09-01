@@ -1,6 +1,6 @@
 using System.Net;
 
-namespace BypassTlsFingerprint.Extensions;
+namespace BypassTlsFingerprint.Implementations.Extensions;
 
 public static class BypassHttpClientExtensions
 {
@@ -20,7 +20,7 @@ public static class BypassHttpClientExtensions
 
     public static BypassHttpClient WithHeaders(this BypassHttpClient httpClient, Dictionary<string, string> headers)
     {
-        foreach (var header in headers)
+        foreach (KeyValuePair<string, string> header in headers)
         {
             httpClient.Headers.Add(header.Key, header.Value);
         }
@@ -49,7 +49,7 @@ public static class BypassHttpClientExtensions
 
     public static BypassHttpClient WithProxy(this BypassHttpClient httpClient, string proxyAndPort)
     {
-        var arr = proxyAndPort.Split(':');
+        string[] arr = proxyAndPort.Split(':');
         return httpClient.WithProxy(arr[0], int.Parse(arr[1]));
     }
 

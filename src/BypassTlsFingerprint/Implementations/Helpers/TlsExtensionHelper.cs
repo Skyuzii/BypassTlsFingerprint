@@ -1,12 +1,12 @@
 using System.Text;
 
-namespace BypassTlsFingerprint.Helpers;
+namespace BypassTlsFingerprint.Implementations.Helpers;
 
 internal static class TlsExtensionHelper
 {
     public static byte[] GetServerNameExtension(string serverName)
     {
-        var name = Encoding.ASCII.GetBytes(serverName);
+        byte[] name = Encoding.ASCII.GetBytes(serverName);
         var ext = new byte[5 + name.Length];
         ext[0] = 0;
         ext[1] = (byte) (3 + name.Length);

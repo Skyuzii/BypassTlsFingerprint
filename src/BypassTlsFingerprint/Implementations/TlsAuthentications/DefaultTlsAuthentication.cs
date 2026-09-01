@@ -1,6 +1,6 @@
 using Org.BouncyCastle.Tls;
 
-namespace BypassTlsFingerprint.TlsAuthentications;
+namespace BypassTlsFingerprint.Implementations.TlsAuthentications;
 
 internal sealed class DefaultTlsAuthentication : TlsAuthentication
 {

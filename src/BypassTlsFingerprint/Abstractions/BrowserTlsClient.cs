@@ -1,9 +1,9 @@
-using BypassTlsFingerprint.TlsAuthentications;
+using BypassTlsFingerprint.Implementations.TlsAuthentications;
 
 using Org.BouncyCastle.Tls;
 using Org.BouncyCastle.Tls.Crypto;
 
-namespace BypassTlsFingerprint.Abstracts;
+namespace BypassTlsFingerprint.Abstractions;
 
 public abstract class BrowserTlsClient : DefaultTlsClient
 {

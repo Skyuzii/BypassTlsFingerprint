@@ -1,4 +1,5 @@
-using BypassTlsFingerprint.Parsers;
+using BypassTlsFingerprint.Implementations.Models;
+using BypassTlsFingerprint.Implementations.Parsers;
 
 namespace BypassTlsFingerprint.Tests;
 
@@ -33,7 +34,7 @@ X-UA-Bot: 1
 ";
 
         var httpParser = new HttpParser();
-        var httpResponse = await httpParser.ParseHttpResponse(response);
+        HttpResponse httpResponse = await httpParser.ParseHttpResponse(response);
         Assert.That(httpResponse.StatusCode > 0, Is.True);
         Assert.That(httpResponse.Content != null, Is.True);
         Assert.That(httpResponse.HttpVersion != null, Is.True);

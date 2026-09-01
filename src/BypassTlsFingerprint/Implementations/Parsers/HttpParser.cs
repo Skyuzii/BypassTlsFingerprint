@@ -1,9 +1,9 @@
 using System.Net;
 
-using BypassTlsFingerprint.Extensions;
-using BypassTlsFingerprint.Models;
+using BypassTlsFingerprint.Implementations.Extensions;
+using BypassTlsFingerprint.Implementations.Models;
 
-namespace BypassTlsFingerprint.Parsers;
+namespace BypassTlsFingerprint.Implementations.Parsers;
 
 public sealed class HttpParser
 {
@@ -35,7 +35,7 @@ public sealed class HttpParser
 
     private void ParseFirstLine(HttpResponse httpResponse, string line, ref ParseMode mode)
     {
-        var args = line.Split(' ');
+        string[] args = line.Split(' ');
         if (args.Length < 3)
         {
             throw new ArgumentException("line не содержит правльниую первую строку HTTP request");
@@ -55,14 +55,14 @@ public sealed class HttpParser
             return;
         }
 
-        var splitIndexOf = line.IndexOf(": ", StringComparison.Ordinal);
+        int splitIndexOf = line.IndexOf(": ", StringComparison.Ordinal);
         if (splitIndexOf < 1)
         {
             throw new ArgumentException($"Ответ содержит некорректный заголовок - {line}");
         }
 
-        var headerName = line.Substring(0, splitIndexOf);
-        var headerValue = line.Substring(splitIndexOf + 1);
+        string headerName = line.Substring(startIndex: 0, splitIndexOf);
+        string headerValue = line.Substring(splitIndexOf + 1);
         httpResponse.Headers.AddOrUpdate(headerName, headerValue);
 
         if (headerName == "Set-Cookie")
@@ -73,20 +73,20 @@ public sealed class HttpParser
 
     private void ParseCookie(HttpResponse httpResponse, string headerValue)
     {
-        var args = headerValue.Split(';');
+        string[] args = headerValue.Split(';');
         var cookie = new Cookie { Path = "/" };
 
         for (var i = 0; i < 2; i++)
         {
-            var item = args[i];
-            var splitIndexOf = item.IndexOf("=", StringComparison.Ordinal);
+            string item = args[i];
+            int splitIndexOf = item.IndexOf("=", StringComparison.Ordinal);
             if (splitIndexOf < 1)
             {
                 throw new ArgumentException($"Куки содержит некорректный заголовок - {headerValue}");
             }
 
-            var name = item.Substring(0, splitIndexOf).TrimStart();
-            var value = item.Substring(splitIndexOf + 1);
+            string name = item.Substring(startIndex: 0, splitIndexOf).TrimStart();
+            string value = item.Substring(splitIndexOf + 1);
 
             switch (name)
             {

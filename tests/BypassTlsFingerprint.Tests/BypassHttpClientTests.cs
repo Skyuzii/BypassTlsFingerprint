@@ -1,6 +1,8 @@
 using System.Text.RegularExpressions;
 
-using BypassTlsFingerprint.Extensions;
+using BypassTlsFingerprint.Implementations;
+using BypassTlsFingerprint.Implementations.Extensions;
+using BypassTlsFingerprint.Implementations.Models;
 
 namespace BypassTlsFingerprint.Tests;
 
@@ -12,11 +14,11 @@ internal sealed class BypassHttpClientTests
     public async Task GetResponse_ShouldReturnResponse()
     {
         var httpClientFactory = new BypassHttpClientFactory();
-        var httpClient = httpClientFactory
+        BypassHttpClient httpClient = httpClientFactory
             .GetHttpClient()
             .WithUserAgent(UserAgent);
 
-        var response = await httpClient.GetResponse("https://auto.ru/cars/used/");
+        HttpResponse response = await httpClient.GetResponse("https://auto.ru/cars/used/");
         Assert.That(response.Cookies.Count > 0, Is.True);
         Assert.That(!string.IsNullOrEmpty(response.Content), Is.True);
     }
@@ -25,11 +27,11 @@ internal sealed class BypassHttpClientTests
     public async Task GetResponseString_ShouldReturnResponseString()
     {
         var httpClientFactory = new BypassHttpClientFactory();
-        var httpClient = httpClientFactory
+        BypassHttpClient httpClient = httpClientFactory
             .GetHttpClient()
             .WithUserAgent(UserAgent);
 
-        var response = await httpClient.GetResponseString("https://io.dexscreener.com/u/search/pairs?q=0x6e2ac0524b447c01f4a96e869ccafd66449e6800");
+        string? response = await httpClient.GetResponseString("https://io.dexscreener.com/u/search/pairs?q=0x6e2ac0524b447c01f4a96e869ccafd66449e6800");
         Assert.That(!string.IsNullOrEmpty(response), Is.True);
     }
 
@@ -39,15 +41,15 @@ internal sealed class BypassHttpClientTests
         const int proxyPort = 8000;
         const string proxyHost = "185.126.84.204";
         var httpClientFactory = new BypassHttpClientFactory();
-        var httpClient = httpClientFactory
+        BypassHttpClient httpClient = httpClientFactory
             .GetHttpClient()
             .WithProxy(proxyHost, proxyPort)
             .WithUserAgent(UserAgent);
 
-        var response = await httpClient.GetResponseString("https://2ip.ru/");
+        string? response = await httpClient.GetResponseString("https://2ip.ru/");
         Assert.That(response, Is.Not.EqualTo(null));
 
-        var responseProxyPort = Regex.Match(response, "return 'IP адрес: (.*?)'").Groups[1].Value;
+        string responseProxyPort = Regex.Match(response, "return 'IP адрес: (.*?)'").Groups[1].Value;
         Assert.That(proxyHost == responseProxyPort, Is.True);
     }
 

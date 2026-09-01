@@ -1,10 +1,10 @@
-using BypassTlsFingerprint.Abstracts;
-using BypassTlsFingerprint.Helpers;
+using BypassTlsFingerprint.Abstractions;
+using BypassTlsFingerprint.Implementations.Helpers;
 
 using Org.BouncyCastle.Tls;
 using Org.BouncyCastle.Tls.Crypto;
 
-namespace BypassTlsFingerprint.TlsClients;
+namespace BypassTlsFingerprint.Implementations.TlsClients;
 
 internal sealed class MozilaTlsClient : BrowserTlsClient
 {

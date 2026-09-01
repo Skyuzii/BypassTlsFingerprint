@@ -1,4 +1,4 @@
-namespace BypassTlsFingerprint.Constants;
+namespace BypassTlsFingerprint.Implementations.Constants;
 
 internal static class HttpHeaderNames
 {

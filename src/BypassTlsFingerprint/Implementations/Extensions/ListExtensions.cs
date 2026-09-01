@@ -1,4 +1,4 @@
-namespace BypassTlsFingerprint.Extensions;
+namespace BypassTlsFingerprint.Implementations.Extensions;
 
 internal static class ListExtensions
 {
