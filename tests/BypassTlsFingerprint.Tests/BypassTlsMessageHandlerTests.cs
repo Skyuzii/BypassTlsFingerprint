@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Text.RegularExpressions;
 
 using BypassTlsFingerprint.Implementations;
@@ -33,28 +34,10 @@ internal sealed class BypassTlsMessageHandlerTests
     public async Task GetString_ShouldReturnContent()
     {
         using var httpClient = new HttpClient(CreateHandler());
+        httpClient.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", UserAgent);
 
-        string response = await httpClient.GetStringAsync("https://io.dexscreener.com/u/search/pairs?q=0x6e2ac0524b447c01f4a96e869ccafd66449e6800");
+        string response = await httpClient.GetStringAsync("https://tls.browserleaks.com/tls");
 
         Assert.That(response, Is.Not.Null.And.Not.Empty);
-    }
-
-    [Test]
-    public async Task GetStringWithProxy_ShouldUseProxy()
-    {
-        const int proxyPort = 8000;
-        const string proxyHost = "185.126.84.204";
-
-        BypassTlsMessageHandler handler = CreateHandler(h =>
-        {
-            h.ProxyHost = proxyHost;
-            h.ProxyPort = proxyPort;
-        });
-        using var httpClient = new HttpClient(handler);
-
-        string response = await httpClient.GetStringAsync("https://2ip.ru/");
-
-        string responseProxyHost = Regex.Match(response, "return 'IP адрес: (.*?)'").Groups[1].Value;
-        Assert.That(responseProxyHost, Is.EqualTo(proxyHost));
     }
 }

@@ -62,6 +62,11 @@ internal sealed class MozilaTlsClient : BrowserTlsClient
         return _clientExtensions;
     }
 
+    public override TlsAuthentication GetAuthentication()
+    {
+        return new DefaultTlsAuthentication();
+    }
+
     public override void SetServerName(string host)
     {
         _clientExtensions[ExtensionType.server_name] = TlsExtensionHelper.GetServerNameExtension(host);
@@ -89,7 +94,10 @@ internal sealed class MozilaTlsClient : BrowserTlsClient
 
     private byte[] GetApplicationLayerProtocolNegotiation()
     {
-        return new byte[14] { 0, 12, 2, 104, 50, 8, 104, 116, 116, 112, 47, 49, 46, 49 };
+        // Only http/1.1 is offered: the transport speaks HTTP/1.1 exclusively, so advertising h2 would let
+        // an h2-preferred server negotiate it and then feed us binary HTTP/2 frames we cannot parse.
+        // (ALPN is not part of the JA3 fingerprint, so dropping h2 does not affect the impersonated JA3.)
+        return new byte[11] { 0, 9, 8, 104, 116, 116, 112, 47, 49, 46, 49 };
     }
 
     private byte[] GetRenegotiationInfo()

@@ -1,5 +1,3 @@
-using BypassTlsFingerprint.Implementations.TlsAuthentications;
-
 using Org.BouncyCastle.Tls;
 using Org.BouncyCastle.Tls.Crypto;
 
@@ -11,10 +9,6 @@ public abstract class BrowserTlsClient : DefaultTlsClient
     {
     }
 
+    /// <summary>Sets the SNI/host used by the client. Called before the handshake.</summary>
     public abstract void SetServerName(string host);
-
-    public override TlsAuthentication GetAuthentication()
-    {
-        return new DefaultTlsAuthentication();
-    }
 }
