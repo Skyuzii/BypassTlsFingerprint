@@ -7,27 +7,22 @@ using Org.BouncyCastle.Tls.Crypto.Impl.BC;
 
 namespace BypassTlsFingerprint.Implementations;
 
-public sealed class BypassHttpClientFactory
+public sealed class BypassTlsMessageHandlerFactory
 {
-    public BypassHttpClient GetHttpClient(string tlsClientName = nameof(MozilaTlsClient))
+    public BypassTlsMessageHandler GetMessageHandler(string tlsClientName = BypassTlsClientNames.Mozila)
     {
-        TlsCrypto tlsCrypto = GetTlsCrypto();
+        TlsCrypto tlsCrypto = new BcTlsCrypto(new SecureRandom());
         BrowserTlsClient tlsClient = GetTlsClientByName(tlsClientName, tlsCrypto);
 
-        return new BypassHttpClient(tlsClient);
+        return new BypassTlsMessageHandler(tlsClient);
     }
 
-    private BrowserTlsClient GetTlsClientByName(string name, TlsCrypto tlsCrypto)
+    private static BrowserTlsClient GetTlsClientByName(string name, TlsCrypto tlsCrypto)
     {
         return name switch
         {
             nameof(MozilaTlsClient) => new MozilaTlsClient(tlsCrypto),
             _ => throw new ArgumentOutOfRangeException(nameof(name), name, message: null)
         };
-    }
-
-    private TlsCrypto GetTlsCrypto()
-    {
-        return new BcTlsCrypto(new SecureRandom());
     }
 }

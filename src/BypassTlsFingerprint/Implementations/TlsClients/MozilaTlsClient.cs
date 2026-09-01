@@ -56,7 +56,7 @@ internal sealed class MozilaTlsClient : BrowserTlsClient
     {
         if (_clientExtensions[ExtensionType.server_name].Length == 0)
         {
-            throw new ArgumentNullException("ServerName", "ServerName должен быть заполнен");
+            throw new ArgumentNullException("ServerName", "ServerName must be set");
         }
 
         return _clientExtensions;
@@ -116,7 +116,7 @@ internal sealed class MozilaTlsClient : BrowserTlsClient
     {
         _clientExtensions = new Dictionary<int, byte[]>();
 
-        // важно сохранить именно такую последовательность
+        // the order of these extensions is significant and must be preserved
         _clientExtensions.Add(ExtensionType.server_name, Array.Empty<byte>());
         _clientExtensions.Add(ExtensionType.extended_master_secret, GetExtendedMasterSecret());
         _clientExtensions.Add(ExtensionType.renegotiation_info, GetRenegotiationInfo());

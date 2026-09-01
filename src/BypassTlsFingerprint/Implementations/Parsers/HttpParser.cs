@@ -38,7 +38,7 @@ public sealed class HttpParser
         string[] args = line.Split(' ');
         if (args.Length < 3)
         {
-            throw new ArgumentException("line не содержит правльниую первую строку HTTP request");
+            throw new ArgumentException("line does not contain a valid HTTP request start line");
         }
 
         httpResponse.HttpVersion = args[0];
@@ -58,7 +58,7 @@ public sealed class HttpParser
         int splitIndexOf = line.IndexOf(": ", StringComparison.Ordinal);
         if (splitIndexOf < 1)
         {
-            throw new ArgumentException($"Ответ содержит некорректный заголовок - {line}");
+            throw new ArgumentException($"Response contains an invalid header - {line}");
         }
 
         string headerName = line.Substring(startIndex: 0, splitIndexOf);
@@ -82,7 +82,7 @@ public sealed class HttpParser
             int splitIndexOf = item.IndexOf("=", StringComparison.Ordinal);
             if (splitIndexOf < 1)
             {
-                throw new ArgumentException($"Куки содержит некорректный заголовок - {headerValue}");
+                throw new ArgumentException($"Cookie contains an invalid header - {headerValue}");
             }
 
             string name = item.Substring(startIndex: 0, splitIndexOf).TrimStart();
