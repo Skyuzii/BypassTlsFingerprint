@@ -17,7 +17,7 @@
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\BypassTlsFingerprint\BypassTlsFingerprint.csproj" />
+      <ProjectReference Include="..\..\src\BypassTlsFingerprint\BypassTlsFingerprint.csproj" />
     </ItemGroup>
 
 </Project>

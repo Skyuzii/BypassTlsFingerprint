@@ -1,8 +1,8 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BypassTlsFingerprint", "BypassTlsFingerprint\BypassTlsFingerprint.csproj", "{918C0255-3CF9-4A83-93B3-AB7FB12C19F5}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BypassTlsFingerprint", "src\BypassTlsFingerprint\BypassTlsFingerprint.csproj", "{918C0255-3CF9-4A83-93B3-AB7FB12C19F5}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BypassTlsFingerprint.Tests", "BypassTlsFingerprint.Tests\BypassTlsFingerprint.Tests.csproj", "{7182AB3B-D8C0-429F-825D-7EA940FEDF32}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BypassTlsFingerprint.Tests", "tests\BypassTlsFingerprint.Tests\BypassTlsFingerprint.Tests.csproj", "{7182AB3B-D8C0-429F-825D-7EA940FEDF32}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
