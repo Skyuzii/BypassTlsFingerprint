@@ -35,7 +35,6 @@ using Org.BouncyCastle.Tls;
 var fp = new TlsFingerprintBuilder()
     .WithVersions(TlsVersions.Tls12, TlsVersions.Tls13)
     .WithCipherSuites(4865, 4866, 49195, 49199)
-    .WithAlpn("http/1.1")
     .AddExtension(ExtensionType.supported_groups, new byte[] { ... })
     .AddExtension(ExtensionType.signature_algorithms, new byte[] { ... })
     .Build();
