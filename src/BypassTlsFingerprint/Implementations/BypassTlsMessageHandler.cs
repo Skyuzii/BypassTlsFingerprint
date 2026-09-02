@@ -50,13 +50,17 @@ public sealed class BypassTlsMessageHandler : HttpMessageHandler
     /// <summary>Sends <c>Expect: 100-continue</c> before a request body.</summary>
     public bool ExpectContinue { get; set; }
 
-    public string? ProxyHost { get; set; }
+    /// <summary>
+    /// The proxy used when <see cref="UseProxy"/> is true, mirroring <see cref="HttpClientHandler.Proxy"/>.
+    /// Defaults to <see cref="HttpClient.DefaultProxy"/> so environment variables (HTTP_PROXY/HTTPS_PROXY/NO_PROXY)
+    /// are honoured just like with a standard <see cref="HttpClient"/>. Hosts the proxy reports as bypassed
+    /// (e.g. loopback via <see cref="WebProxy.BypassProxyOnLocal"/>) are contacted directly. Set to null to
+    /// disable proxying.
+    /// </summary>
+    public IWebProxy? Proxy { get; set; } = HttpClient.DefaultProxy;
 
-    public int? ProxyPort { get; set; }
-
-    public ICredentials? ProxyCredentials { get; set; }
-
-    public bool BypassProxyOnLocal { get; set; }
+    /// <summary>Fallback credentials used for proxy authentication when <see cref="Proxy"/> carries none.</summary>
+    public ICredentials? DefaultProxyCredentials { get; set; }
 
     public CookieContainer? CookieContainer { get; set; }
 
@@ -164,17 +168,17 @@ public sealed class BypassTlsMessageHandler : HttpMessageHandler
     private async Task<BypassConnection> CreateConnectionAsync(Endpoint endpoint, CancellationToken ct)
     {
         CancellationToken connectCt = WithConnectTimeout(ct);
-        bool useProxy = IsProxyUsed(endpoint);
+        var destination = new Uri($"{endpoint.Scheme}://{endpoint.Host}:{endpoint.Port}/");
         TcpClient client;
 
-        if (!useProxy)
+        if (!ResolveProxy(destination, out Uri? proxyAddress))
         {
             client = new TcpClient();
             await client.ConnectAsync(endpoint.Host, endpoint.Port, connectCt);
         }
         else
         {
-            client = await ConnectThroughProxyAsync(endpoint, connectCt);
+            client = await ConnectThroughProxyAsync(endpoint, proxyAddress!, connectCt);
         }
 
         Stream stream = client.GetStream();
@@ -192,7 +196,7 @@ public sealed class BypassTlsMessageHandler : HttpMessageHandler
 
     private byte[] BuildRequestBody(HttpRequestMessage request, Uri uri, byte[]? body, bool expectContinue)
     {
-        bool viaProxy = IsProxyUsed(new Endpoint(uri.Scheme, uri.Host, GetTargetPort(uri)));
+        bool viaProxy = IsProxyUsed(uri);
         string target = BuildRequestTarget(request, uri, viaProxy && uri.Scheme == Uri.UriSchemeHttp);
 
         // HTTP/1.1 mandates CRLF line endings — never Environment.NewLine (which is "\\n" on Unix).
@@ -456,12 +460,12 @@ public sealed class BypassTlsMessageHandler : HttpMessageHandler
         return true;
     }
 
-    private async Task<TcpClient> ConnectThroughProxyAsync(Endpoint endpoint, CancellationToken ct)
+    private async Task<TcpClient> ConnectThroughProxyAsync(Endpoint endpoint, Uri proxyAddress, CancellationToken ct)
     {
         var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-        await socket.ConnectAsync(ProxyHost!, ProxyPort!.Value, ct);
+        await socket.ConnectAsync(proxyAddress.Host, GetProxyPort(proxyAddress), ct);
 
-        string? authorizationHeader = BuildProxyAuthorizationHeader();
+        string? authorizationHeader = BuildProxyAuthorizationHeader(proxyAddress);
         byte[] connectMessage = Encoding.UTF8.GetBytes(
             $"CONNECT {endpoint.Host}:{endpoint.Port} HTTP/1.1\r\n" +
             $"Host: {endpoint.Host}:{endpoint.Port}\r\n" +
@@ -476,7 +480,7 @@ public sealed class BypassTlsMessageHandler : HttpMessageHandler
         if (!proxyResponse.Contains(" 200 "))
         {
             throw new HttpRequestException(
-                $"Failed to connect to the proxy server {ProxyHost}:{ProxyPort}. Response: {proxyResponse}");
+                $"Failed to connect to the proxy server {proxyAddress}. Response: {proxyResponse}");
         }
 
         return new TcpClient
@@ -485,35 +489,67 @@ public sealed class BypassTlsMessageHandler : HttpMessageHandler
         };
     }
 
-    private string? BuildProxyAuthorizationHeader()
+    private string? BuildProxyAuthorizationHeader(Uri proxyAddress)
     {
-        if (ProxyCredentials is null)
+        ICredentials? credentials = DefaultProxyCredentials ?? Proxy?.Credentials;
+        if (credentials is null)
         {
             return null;
         }
 
-        NetworkCredential credentials = ProxyCredentials.GetCredential(
-            new Uri($"http://{ProxyHost}:{ProxyPort}/"), "Basic") ?? new NetworkCredential();
+        NetworkCredential credential = credentials.GetCredential(proxyAddress, "Basic") ?? new NetworkCredential();
 
-        var userPass = $"{credentials.UserName}:{credentials.Password}";
+        var userPass = $"{credential.UserName}:{credential.Password}";
         return $"Proxy-Authorization: Basic {Convert.ToBase64String(Encoding.UTF8.GetBytes(userPass))}";
     }
 
-    private bool IsProxyUsed(Endpoint endpoint)
+    private bool ResolveProxy(Uri destination, out Uri? proxyAddress)
     {
-        if (!UseProxy || string.IsNullOrEmpty(ProxyHost) || ProxyPort is null)
+        proxyAddress = null;
+        if (!UseProxy || Proxy is null)
         {
             return false;
         }
 
-        if (BypassProxyOnLocal &&
-            (endpoint.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
-             Uri.TryCreate($"http://{endpoint.Host}", UriKind.Absolute, out Uri? u) && u.IsLoopback))
+        // Loopback is never proxied — parity with HttpClient, and unlike WebProxy.BypassProxyOnLocal this
+        // also covers IP literals (127.0.0.1 / ::1), which that flag does not treat as "local".
+        if (IsLoopbackHost(destination.Host))
         {
             return false;
         }
 
-        return true;
+        if (Proxy.IsBypassed(destination))
+        {
+            return false;
+        }
+
+        proxyAddress = Proxy.GetProxy(destination);
+        return proxyAddress is not null;
+    }
+
+    private static bool IsLoopbackHost(string host)
+    {
+        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return IPAddress.TryParse(host, out IPAddress? address) && IPAddress.IsLoopback(address);
+    }
+
+    private bool IsProxyUsed(Uri destination)
+    {
+        return ResolveProxy(destination, out _);
+    }
+
+    private static int GetProxyPort(Uri proxyAddress)
+    {
+        if (!proxyAddress.IsDefaultPort)
+        {
+            return proxyAddress.Port;
+        }
+
+        return proxyAddress.Scheme == Uri.UriSchemeHttps ? 443 : 80;
     }
 
     /// <summary>Resolves the connect port, honouring an explicit URI port, the <see cref="Port"/> override

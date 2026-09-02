@@ -13,6 +13,8 @@ internal sealed class BypassTlsMessageHandlerAdvancedTests
     private static HttpClient CreateClient(Action<BypassTlsMessageHandler>? configure = null)
     {
         BypassTlsMessageHandler handler = new BypassTlsMessageHandlerFactory().GetMessageHandler();
+        // Disable proxying by default so tests are hermetic; proxy tests opt in via the configure callback.
+        handler.Proxy = null;
         configure?.Invoke(handler);
         return new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };
     }
@@ -37,9 +39,10 @@ internal sealed class BypassTlsMessageHandlerAdvancedTests
 
         using HttpClient http = CreateClient(h =>
         {
-            h.ProxyHost = "127.0.0.1";
-            h.ProxyPort = proxyPort;
-            h.ProxyCredentials = new NetworkCredential("user", "pass");
+            h.Proxy = new WebProxy($"http://127.0.0.1:{proxyPort}")
+            {
+                Credentials = new NetworkCredential("user", "pass"),
+            };
         });
 
         Exception? ex = await WithTimeoutAsync(
@@ -60,11 +63,10 @@ internal sealed class BypassTlsMessageHandlerAdvancedTests
             new FakeResponse { Body = "local"u8.ToArray() }));
 
         // Proxy points at a closed port; it would fail if actually used for the loopback target.
+        // WebProxy.BypassProxyOnLocal is true by default, so the loopback destination is contacted directly.
         using HttpClient http = CreateClient(h =>
         {
-            h.ProxyHost = "127.0.0.1";
-            h.ProxyPort = 1;
-            h.BypassProxyOnLocal = true;
+            h.Proxy = new WebProxy("http://127.0.0.1:1");
         });
 
         string body = await http.GetStringAsync(server.BaseUri);

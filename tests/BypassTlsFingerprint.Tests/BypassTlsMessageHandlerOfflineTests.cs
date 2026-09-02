@@ -12,6 +12,9 @@ internal sealed class BypassTlsMessageHandlerOfflineTests
     private static HttpClient CreateClient(Action<BypassTlsMessageHandler>? configure = null)
     {
         BypassTlsMessageHandler handler = new BypassTlsMessageHandlerFactory().GetMessageHandler();
+        // Disable proxying so the tests are hermetic: the handler's default proxy follows environment
+        // variables (HTTP_PROXY/HTTPS_PROXY), which must not route loopback traffic while offline.
+        handler.Proxy = null;
         configure?.Invoke(handler);
         return new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };
     }
