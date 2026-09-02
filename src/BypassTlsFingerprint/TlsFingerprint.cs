@@ -14,12 +14,6 @@ public sealed class TlsFingerprint
     public required IReadOnlyList<int> CipherSuites { get; init; }
 
     /// <summary>
-    /// The ALPN protocol the client advertises and negotiates (JA4 stores this explicitly). The
-    /// transport speaks HTTP/1.1 exclusively, so this is a single protocol, e.g. "http/1.1".
-    /// </summary>
-    public required string AlpnProtocol { get; init; }
-
-    /// <summary>
     /// The ClientHello extensions in their exact wire order — extension order is significant for
     /// both JA3 and JA4, and the per-extension payloads (e.g. signature_algorithms, supported_groups)
     /// are the raw bytes recorded here. The <see cref="ExtensionType.server_name"/> entry is present

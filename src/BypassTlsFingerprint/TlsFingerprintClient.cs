@@ -19,19 +19,7 @@ internal sealed class TlsFingerprintClient : DefaultTlsClient
     internal TlsFingerprintClient(TlsCrypto crypto, TlsFingerprint fingerprint) : base(crypto)
     {
         _fingerprint = fingerprint;
-
-        var extensions = new Dictionary<int, byte[]>();
-        foreach (KeyValuePair<int, byte[]> extension in fingerprint.Extensions)
-        {
-            extensions[extension.Key] = extension.Value;
-        }
-
-        if (!extensions.ContainsKey(ExtensionType.application_layer_protocol_negotiation) && !string.IsNullOrEmpty(fingerprint.AlpnProtocol))
-        {
-            extensions[ExtensionType.application_layer_protocol_negotiation] = BuildAlpnExtensionBody(fingerprint.AlpnProtocol);
-        }
-
-        _clientExtensions = extensions;
+        _clientExtensions = fingerprint.Extensions.ToDictionary();
     }
 
     public void SetServerName(string host)
@@ -74,16 +62,5 @@ internal sealed class TlsFingerprintClient : DefaultTlsClient
     public override TlsAuthentication GetAuthentication()
     {
         return new DefaultTlsAuthentication();
-    }
-
-    private static byte[] BuildAlpnExtensionBody(string protocol)
-    {
-        byte[] name = Encoding.ASCII.GetBytes(protocol);
-        var body = new byte[3 + name.Length];
-        body[0] = 0;
-        body[1] = (byte)(1 + name.Length);
-        body[2] = (byte)name.Length;
-        Array.Copy(name, sourceIndex: 0, body, destinationIndex: 3, name.Length);
-        return body;
     }
 }

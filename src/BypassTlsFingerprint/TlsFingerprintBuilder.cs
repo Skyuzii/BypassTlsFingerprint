@@ -6,7 +6,6 @@ public sealed class TlsFingerprintBuilder
 {
     private ProtocolVersion[] _versions = Array.Empty<ProtocolVersion>();
     private int[] _ciphers = Array.Empty<int>();
-    private string? _alpn;
     private readonly List<KeyValuePair<int, byte[]>> _extensions = new List<KeyValuePair<int, byte[]>>();
 
     public TlsFingerprintBuilder WithVersions(params ProtocolVersion[] versions)
@@ -44,12 +43,6 @@ public sealed class TlsFingerprintBuilder
         return WithCipherSuites(ciphers);
     }
 
-    public TlsFingerprintBuilder WithAlpn(string alpn)
-    {
-        _alpn = alpn;
-        return this;
-    }
-
     /// <summary>Adds an extension. The call order is the wire order in the ClientHello.</summary>
     public TlsFingerprintBuilder AddExtension(int extensionType, byte[] data)
     {
@@ -69,11 +62,6 @@ public sealed class TlsFingerprintBuilder
             throw new InvalidOperationException("At least one cipher suite is required (call WithCipherSuites).");
         }
 
-        if (string.IsNullOrWhiteSpace(_alpn))
-        {
-            throw new InvalidOperationException("An ALPN protocol is required (call WithAlpn).");
-        }
-
         List<KeyValuePair<int, byte[]>> extensions = _extensions.ToList();
         if (extensions.All(e => e.Key != ExtensionType.server_name))
         {
@@ -84,7 +72,6 @@ public sealed class TlsFingerprintBuilder
         {
             SupportedVersions = _versions,
             CipherSuites = _ciphers,
-            AlpnProtocol = _alpn,
             Extensions = extensions,
         };
     }
