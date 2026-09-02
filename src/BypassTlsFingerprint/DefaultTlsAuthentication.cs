@@ -1,6 +1,6 @@
 using Org.BouncyCastle.Tls;
 
-namespace BypassTlsFingerprint.Implementations;
+namespace BypassTlsFingerprint;
 
 /// <summary>
 /// The default <see cref="TlsAuthentication"/>: accepts any server certificate and sends no client

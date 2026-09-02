@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 
-namespace BypassTlsFingerprint.Implementations;
+namespace BypassTlsFingerprint;
 
 /// <summary>Identifies a group of interchangeable connections.</summary>
 internal readonly record struct Endpoint(string Scheme, string Host, int Port)
@@ -16,27 +16,27 @@ internal readonly record struct Endpoint(string Scheme, string Host, int Port)
 /// established (incl. TLS) connections across requests, prunes idle connections and caps the number of
 /// concurrent connections per endpoint.
 /// </summary>
-internal sealed class BypassConnectionPool
+internal sealed class HttpConnectionPool
 {
     private readonly TimeSpan _idleTimeout;
-    private readonly Func<Endpoint, CancellationToken, Task<BypassConnection>> _factory;
+    private readonly Func<Endpoint, CancellationToken, Task<HttpConnection>> _factory;
     private readonly ConcurrentDictionary<Endpoint, EndpointPool> _pools = new ConcurrentDictionary<Endpoint, EndpointPool>();
 
-    public BypassConnectionPool(TimeSpan idleTimeout, Func<Endpoint, CancellationToken, Task<BypassConnection>> factory)
+    public HttpConnectionPool(TimeSpan idleTimeout, Func<Endpoint, CancellationToken, Task<HttpConnection>> factory)
     {
         _idleTimeout = idleTimeout;
         _factory = factory;
     }
 
     /// <summary>Rents a connection for <paramref name="key"/>, creating or reusing one as appropriate.</summary>
-    public async Task<BypassConnection> RentAsync(Endpoint key, int maxPerServer, CancellationToken ct)
+    public async Task<HttpConnection> RentAsync(Endpoint key, int maxPerServer, CancellationToken ct)
     {
         EndpointPool pool = _pools.GetOrAdd(key, k => new EndpointPool(_factory, _idleTimeout, k));
         return await pool.RentAsync(maxPerServer, ct).ConfigureAwait(false);
     }
 
     /// <summary>Returns a connection to the pool, or disposes it when it is no longer reusable.</summary>
-    public void Return(BypassConnection connection, Endpoint key)
+    public void Return(HttpConnection connection, Endpoint key)
     {
         if (_pools.TryGetValue(key, out EndpointPool? pool))
         {
@@ -60,21 +60,21 @@ internal sealed class BypassConnectionPool
 
     private sealed class EndpointPool
     {
-        private readonly Func<Endpoint, CancellationToken, Task<BypassConnection>> _factory;
+        private readonly Func<Endpoint, CancellationToken, Task<HttpConnection>> _factory;
         private readonly TimeSpan _idleTimeout;
         private readonly Endpoint _key;
         private readonly object _sync = new object();
-        private readonly Stack<BypassConnection> _idle = new Stack<BypassConnection>();
+        private readonly Stack<HttpConnection> _idle = new Stack<HttpConnection>();
         private SemaphoreSlim? _semaphore;
 
-        public EndpointPool(Func<Endpoint, CancellationToken, Task<BypassConnection>> factory, TimeSpan idleTimeout, Endpoint key)
+        public EndpointPool(Func<Endpoint, CancellationToken, Task<HttpConnection>> factory, TimeSpan idleTimeout, Endpoint key)
         {
             _factory = factory;
             _idleTimeout = idleTimeout;
             _key = key;
         }
 
-        public async Task<BypassConnection> RentAsync(int maxPerServer, CancellationToken ct)
+        public async Task<HttpConnection> RentAsync(int maxPerServer, CancellationToken ct)
         {
             SemaphoreSlim semaphore = GetSemaphore(maxPerServer);
             await semaphore.WaitAsync(ct).ConfigureAwait(false);
@@ -85,7 +85,7 @@ internal sealed class BypassConnectionPool
                 {
                     while (_idle.Count > 0)
                     {
-                        BypassConnection candidate = _idle.Pop();
+                        HttpConnection candidate = _idle.Pop();
                         if (candidate.IsReusable && !candidate.IsExpired(_idleTimeout))
                         {
                             candidate.MarkUsed();
@@ -105,7 +105,7 @@ internal sealed class BypassConnectionPool
             }
         }
 
-        public void Return(BypassConnection connection)
+        public void Return(HttpConnection connection)
         {
             lock (_sync)
             {
@@ -136,7 +136,7 @@ internal sealed class BypassConnectionPool
         {
             lock (_sync)
             {
-                foreach (BypassConnection connection in _idle)
+                foreach (HttpConnection connection in _idle)
                 {
                     connection.Dispose();
                 }

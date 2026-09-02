@@ -3,7 +3,6 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.RegularExpressions;
 
-using BypassTlsFingerprint.Implementations;
 using BypassTlsFingerprint.Tests.Support;
 
 namespace BypassTlsFingerprint.Tests;
@@ -12,7 +11,7 @@ internal sealed class BypassTlsMessageHandlerAdvancedTests
 {
     private static HttpClient CreateClient(Action<BypassTlsMessageHandler>? configure = null)
     {
-        BypassTlsMessageHandler handler = new BypassTlsMessageHandlerFactory().GetMessageHandler();
+        var handler = new BypassTlsMessageHandler(TlsFingerprintProfiles.Mozilla.Firefox0);
         // Disable proxying by default so tests are hermetic; proxy tests opt in via the configure callback.
         handler.Proxy = null;
         configure?.Invoke(handler);

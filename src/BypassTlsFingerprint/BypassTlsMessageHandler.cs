@@ -3,15 +3,15 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 
-using BypassTlsFingerprint.Abstractions;
-
+using Org.BouncyCastle.Security;
 using Org.BouncyCastle.Tls;
+using Org.BouncyCastle.Tls.Crypto.Impl.BC;
 
-namespace BypassTlsFingerprint.Implementations;
+namespace BypassTlsFingerprint;
 
 /// <summary>
 /// A transport <see cref="HttpMessageHandler"/> that performs HTTP/1.1 requests over a TLS connection
-/// based on <see cref="BrowserTlsClient"/> (a spoofed browser JA3 fingerprint) instead of the standard
+/// based on <see cref="CustomTlsClient"/> (a spoofed browser JA3 fingerprint) instead of the standard
 /// <see cref="SocketsHttpHandler"/>. It is plugged into an <see cref="HttpClient"/> via
 /// <c>new HttpClient(handler)</c>.
 /// </summary>
@@ -24,9 +24,9 @@ public sealed class BypassTlsMessageHandler : HttpMessageHandler
         "Content-Type", "Expires", "Last-Modified",
     };
 
-    private readonly BrowserTlsClient _tlsClient;
+    private readonly CustomTlsClient _tlsClient;
     private readonly HttpResponseParser _httpResponseParser = new HttpResponseParser();
-    private readonly BypassConnectionPool _pool;
+    private readonly HttpConnectionPool _pool;
 
     public int Port { get; set; } = 443;
 
@@ -64,10 +64,15 @@ public sealed class BypassTlsMessageHandler : HttpMessageHandler
 
     public CookieContainer? CookieContainer { get; set; }
 
-    public BypassTlsMessageHandler(BrowserTlsClient tlsClient)
+    /// <summary>
+    /// Creates a handler that impersonates the given browser fingerprint. The TLS client itself
+    /// (<see cref="CustomTlsClient"/>) is constructed internally — consumers only describe the
+    /// impersonation with a <see cref="TlsFingerprint"/>. Defaults to the shipped Firefox profile.
+    /// </summary>
+    public BypassTlsMessageHandler(TlsFingerprint fingerprint)
     {
-        _tlsClient = tlsClient;
-        _pool = new BypassConnectionPool(PooledConnectionIdleTimeout, CreateConnectionAsync);
+        _tlsClient = new CustomTlsClient(new BcTlsCrypto(new SecureRandom()), fingerprint);
+        _pool = new HttpConnectionPool(PooledConnectionIdleTimeout, CreateConnectionAsync);
     }
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -115,7 +120,7 @@ public sealed class BypassTlsMessageHandler : HttpMessageHandler
         ct.ThrowIfCancellationRequested();
 
         var endpoint = new Endpoint(uri.Scheme, uri.Host, GetTargetPort(uri));
-        BypassConnection connection = await _pool.RentAsync(endpoint, MaxConnectionsPerServer, ct);
+        HttpConnection connection = await _pool.RentAsync(endpoint, MaxConnectionsPerServer, ct);
 
         try
         {
@@ -165,7 +170,7 @@ public sealed class BypassTlsMessageHandler : HttpMessageHandler
         }
     }
 
-    private async Task<BypassConnection> CreateConnectionAsync(Endpoint endpoint, CancellationToken ct)
+    private async Task<HttpConnection> CreateConnectionAsync(Endpoint endpoint, CancellationToken ct)
     {
         CancellationToken connectCt = WithConnectTimeout(ct);
         var destination = new Uri($"{endpoint.Scheme}://{endpoint.Host}:{endpoint.Port}/");
@@ -191,7 +196,7 @@ public sealed class BypassTlsMessageHandler : HttpMessageHandler
             stream = protocol.Stream;
         }
 
-        return new BypassConnection(client, stream, isTls: endpoint.Scheme == Uri.UriSchemeHttps, endpoint.Host);
+        return new HttpConnection(client, stream, isTls: endpoint.Scheme == Uri.UriSchemeHttps, endpoint.Host);
     }
 
     private byte[] BuildRequestBody(HttpRequestMessage request, Uri uri, byte[]? body, bool expectContinue)

@@ -1,7 +1,5 @@
 using System.Text;
 
-using BypassTlsFingerprint.Implementations;
-
 namespace BypassTlsFingerprint.Tests;
 
 internal sealed class HttpResponseParserTests

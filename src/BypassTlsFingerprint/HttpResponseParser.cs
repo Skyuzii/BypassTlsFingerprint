@@ -1,18 +1,9 @@
 using System.Text;
 
-namespace BypassTlsFingerprint.Implementations;
+namespace BypassTlsFingerprint;
 
-/// <summary>
-/// Parses a single raw HTTP/1.1 response from a stream. Handles status line, headers and a body
-/// framed by <c>Content-Length</c>, <c>Transfer-Encoding: chunked</c> or close-delimited EOF.
-/// The body is kept as raw bytes so binary content is preserved.
-/// </summary>
 public sealed class HttpResponseParser
 {
-    /// <summary>
-    /// Reads one response from <paramref name="stream"/>, returning a buffered result. The stream is left
-    /// open and unconsumed-intact so a keep-alive connection can be reused for a subsequent request.
-    /// </summary>
     public async Task<HttpResponse> Parse(Stream stream, CancellationToken cancellationToken)
     {
         byte[] head = await ReadHeadAsync(stream, cancellationToken);
@@ -150,7 +141,6 @@ public sealed class HttpResponseParser
             byte[] chunk = await ReadExactlyAsync(stream, size, ct);
             await body.WriteAsync(chunk, ct);
 
-            // Consume the CRLF that terminates each chunk.
             _ = await ReadExactlyAsync(stream, count: 2, ct);
         }
 

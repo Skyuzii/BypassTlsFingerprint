@@ -1,4 +1,4 @@
-namespace BypassTlsFingerprint.Implementations;
+namespace BypassTlsFingerprint;
 
 /// <summary>
 /// A read-only stream that yields a prefix of already-buffered bytes before falling through to an inner

@@ -1,4 +1,4 @@
-namespace BypassTlsFingerprint.Implementations;
+namespace BypassTlsFingerprint;
 
 /// <summary>A parsed raw HTTP/1.1 response (status line, headers and a buffered binary body).</summary>
 public sealed class HttpResponse

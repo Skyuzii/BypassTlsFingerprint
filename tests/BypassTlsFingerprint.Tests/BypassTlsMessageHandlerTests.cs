@@ -1,8 +1,4 @@
 using System.Net;
-using System.Net.Http.Headers;
-using System.Text.RegularExpressions;
-
-using BypassTlsFingerprint.Implementations;
 
 namespace BypassTlsFingerprint.Tests;
 
@@ -12,7 +8,7 @@ internal sealed class BypassTlsMessageHandlerTests
 
     private static BypassTlsMessageHandler CreateHandler(Action<BypassTlsMessageHandler>? configure = null)
     {
-        BypassTlsMessageHandler handler = new BypassTlsMessageHandlerFactory().GetMessageHandler();
+        var handler = new BypassTlsMessageHandler(TlsFingerprintProfiles.Mozilla.Firefox0);
         configure?.Invoke(handler);
         return handler;
     }
