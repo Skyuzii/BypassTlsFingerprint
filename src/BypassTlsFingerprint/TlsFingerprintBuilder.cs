@@ -20,7 +20,9 @@ public sealed class TlsFingerprintBuilder
         return this;
     }
 
-    /// <summary>Sets the cipher list from a JA3-style decimal, comma-separated string.</summary>
+    /// <summary>
+    /// Sets the cipher list from a JA3-style decimal, comma-separated string
+    /// </summary>
     public TlsFingerprintBuilder WithCiphers(string ja3CipherList)
     {
         if (string.IsNullOrWhiteSpace(ja3CipherList))
@@ -43,7 +45,9 @@ public sealed class TlsFingerprintBuilder
         return WithCipherSuites(ciphers);
     }
 
-    /// <summary>Adds an extension. The call order is the wire order in the ClientHello.</summary>
+    /// <summary>
+    /// Adds an extension. The call order is the wire order in the ClientHello
+    /// </summary>
     public TlsFingerprintBuilder AddExtension(int extensionType, byte[] data)
     {
         _extensions.Add(new KeyValuePair<int, byte[]>(extensionType, data));

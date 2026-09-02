@@ -39,6 +39,11 @@ internal static class ResponseMapper
         return response;
     }
 
+    /// <summary>
+    /// Decompresses the response body when <paramref name="automaticDecompression"/> advertises a matching
+    /// encoding. Returns a new <see cref="HttpResponse"/> with decoded content and the on-the-wire framing
+    /// headers removed; the original is left untouched.
+    /// </summary>
     public static HttpResponse Decompress(HttpResponse parsed, DecompressionMethods automaticDecompression)
     {
         string? contentEncoding = HttpHeaders.GetHeader(parsed.Headers, "Content-Encoding");
@@ -47,43 +52,61 @@ internal static class ResponseMapper
             return parsed;
         }
 
-        Stream? decompressor = null;
         string token = contentEncoding.Split(',')[0].Trim();
 
-        if ((automaticDecompression & DecompressionMethods.GZip) != 0 && token.Equals("gzip", StringComparison.OrdinalIgnoreCase))
+        Stream? decompressor = token switch
         {
-            decompressor = new GZipStream(new MemoryStream(parsed.Content), CompressionMode.Decompress);
-        }
-        else if ((automaticDecompression & DecompressionMethods.Deflate) != 0 && token.Equals("deflate", StringComparison.OrdinalIgnoreCase))
-        {
-            decompressor = new DeflateStream(new MemoryStream(parsed.Content), CompressionMode.Decompress);
-        }
-        else if ((automaticDecompression & DecompressionMethods.Brotli) != 0 && token.Equals("br", StringComparison.OrdinalIgnoreCase))
-        {
-            decompressor = new BrotliStream(new MemoryStream(parsed.Content), CompressionMode.Decompress);
-        }
+            "gzip" when (automaticDecompression & DecompressionMethods.GZip) != 0
+                => new GZipStream(new MemoryStream(parsed.Content), CompressionMode.Decompress),
+            "deflate" when (automaticDecompression & DecompressionMethods.Deflate) != 0
+                => new DeflateStream(new MemoryStream(parsed.Content), CompressionMode.Decompress),
+            "br" when (automaticDecompression & DecompressionMethods.Brotli) != 0
+                => new BrotliStream(new MemoryStream(parsed.Content), CompressionMode.Decompress),
+            _ => null,
+        };
 
         if (decompressor is null)
         {
             return parsed;
         }
 
+        byte[] decoded;
         using (decompressor)
         {
             using var output = new MemoryStream();
             decompressor.CopyTo(output);
-            parsed.Content = output.ToArray();
+            decoded = output.ToArray();
         }
 
-        // The body is now decoded: drop the headers that described the on-the-wire bytes.
-        parsed.Headers.RemoveAll(h =>
-            h.Key.Equals("Content-Encoding", StringComparison.OrdinalIgnoreCase) ||
-            h.Key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase) ||
-            h.Key.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase));
+        // The body is now decoded: rebuild the header list without the on-the-wire framing meta.
+        var headers = new List<KeyValuePair<string, string>>(parsed.Headers.Count);
+        foreach (KeyValuePair<string, string> header in parsed.Headers)
+        {
+            if (header.Key.Equals("Content-Encoding", StringComparison.OrdinalIgnoreCase) ||
+                header.Key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase) ||
+                header.Key.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
 
-        return parsed;
+            headers.Add(header);
+        }
+
+        return new HttpResponse
+        {
+            HttpVersion = parsed.HttpVersion,
+            StatusCode = parsed.StatusCode,
+            Headers = headers,
+            Content = decoded,
+            IsConnectionReusable = parsed.IsConnectionReusable,
+        };
     }
 
+    /// <summary>
+    /// Stores every <c>Set-Cookie</c> header into the container. Each cookie is set individually per
+    /// RFC 6265 — concatenating with commas (the old approach) corrupts cookies whose attributes contain
+    /// commas (e.g. <c>Expires=Wed, 09 Jun 2021 ...</c>).
+    /// </summary>
     public static void AddCookies(HttpResponse parsed, Uri uri, bool useCookies, CookieContainer? cookieContainer)
     {
         if (!useCookies || cookieContainer is null)
@@ -91,17 +114,20 @@ internal static class ResponseMapper
             return;
         }
 
-        string[] setCookies = parsed.Headers
-            .Where(h => h.Key.Equals("Set-Cookie", StringComparison.OrdinalIgnoreCase))
-            .Select(h => h.Value)
-            .ToArray();
-
-        if (setCookies.Length == 0)
+        foreach (KeyValuePair<string, string> header in parsed.Headers)
         {
-            return;
+            if (header.Key.Equals("Set-Cookie", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    cookieContainer.SetCookies(uri, header.Value);
+                }
+                catch (CookieException)
+                {
+                    // A malformed cookie must not abort the response; skip it like HttpClient does.
+                }
+            }
         }
-
-        cookieContainer.SetCookies(uri, string.Join(", ", setCookies));
     }
 
     private static Version ParseVersion(string httpVersion)
@@ -109,7 +135,7 @@ internal static class ResponseMapper
         return httpVersion switch
         {
             "HTTP/1.0" => HttpVersion.Version10,
-            _ => HttpVersion.Version11
+            _ => HttpVersion.Version11,
         };
     }
 }

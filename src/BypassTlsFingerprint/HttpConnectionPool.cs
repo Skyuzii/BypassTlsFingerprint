@@ -13,25 +13,32 @@ internal readonly record struct Endpoint(string Scheme, string Host, int Port)
 
 /// <summary>
 /// A small connection pool keyed by <see cref="Endpoint"/>. It enables HTTP/1.1 keep-alive by reusing
-/// established (incl. TLS) connections across requests, prunes idle connections and caps the number of
-/// concurrent connections per endpoint.
+/// established (incl. TLS) connections across requests, prunes idle/expired connections and caps the
+/// number of concurrent connections per endpoint.
 /// </summary>
+/// <remarks>
+/// Mirrors <c>SocketsHttpHandler</c>'s pool shape: idle HTTP/1.1 connections are kept in a lock-free
+/// LIFO stack (<c>ConcurrentStack</c>), and expiry is checked both on checkout and on return so an
+/// expired connection never waits in the pool for the next caller to discover.
+/// </remarks>
 internal sealed class HttpConnectionPool
 {
     private readonly TimeSpan _idleTimeout;
+    private readonly TimeSpan _lifetime;
     private readonly Func<Endpoint, CancellationToken, Task<HttpConnection>> _factory;
     private readonly ConcurrentDictionary<Endpoint, EndpointPool> _pools = new ConcurrentDictionary<Endpoint, EndpointPool>();
 
-    public HttpConnectionPool(TimeSpan idleTimeout, Func<Endpoint, CancellationToken, Task<HttpConnection>> factory)
+    public HttpConnectionPool(TimeSpan idleTimeout, TimeSpan lifetime, Func<Endpoint, CancellationToken, Task<HttpConnection>> factory)
     {
         _idleTimeout = idleTimeout;
+        _lifetime = lifetime;
         _factory = factory;
     }
 
     /// <summary>Rents a connection for <paramref name="key"/>, creating or reusing one as appropriate.</summary>
     public async Task<HttpConnection> RentAsync(Endpoint key, int maxPerServer, CancellationToken ct)
     {
-        EndpointPool pool = _pools.GetOrAdd(key, k => new EndpointPool(_factory, _idleTimeout, k));
+        EndpointPool pool = _pools.GetOrAdd(key, k => new EndpointPool(_factory, _idleTimeout, _lifetime, k));
         return await pool.RentAsync(maxPerServer, ct).ConfigureAwait(false);
     }
 
@@ -62,15 +69,19 @@ internal sealed class HttpConnectionPool
     {
         private readonly Func<Endpoint, CancellationToken, Task<HttpConnection>> _factory;
         private readonly TimeSpan _idleTimeout;
+        private readonly TimeSpan _lifetime;
         private readonly Endpoint _key;
-        private readonly object _sync = new object();
-        private readonly Stack<HttpConnection> _idle = new Stack<HttpConnection>();
+
+        // Lock-free LIFO: the most recently used connection is the least likely to have been closed by
+        // the peer, which is exactly SocketsHttpHandler's rationale for a stack.
+        private readonly ConcurrentStack<HttpConnection> _idle = new ConcurrentStack<HttpConnection>();
         private SemaphoreSlim? _semaphore;
 
-        public EndpointPool(Func<Endpoint, CancellationToken, Task<HttpConnection>> factory, TimeSpan idleTimeout, Endpoint key)
+        public EndpointPool(Func<Endpoint, CancellationToken, Task<HttpConnection>> factory, TimeSpan idleTimeout, TimeSpan lifetime, Endpoint key)
         {
             _factory = factory;
             _idleTimeout = idleTimeout;
+            _lifetime = lifetime;
             _key = key;
         }
 
@@ -81,19 +92,16 @@ internal sealed class HttpConnectionPool
 
             try
             {
-                lock (_sync)
+                // Pop candidates until a live, non-expired one is found.
+                while (_idle.TryPop(out HttpConnection? candidate))
                 {
-                    while (_idle.Count > 0)
+                    if (candidate.IsReusable && !candidate.IsExpired(_idleTimeout) && !candidate.IsPastLifetime(_lifetime))
                     {
-                        HttpConnection candidate = _idle.Pop();
-                        if (candidate.IsReusable && !candidate.IsExpired(_idleTimeout))
-                        {
-                            candidate.MarkUsed();
-                            return candidate; // the semaphore slot stays owned by the active caller
-                        }
-
-                        candidate.Dispose();
+                        candidate.MarkUsed();
+                        return candidate; // the semaphore slot stays owned by the active caller
                     }
+
+                    candidate.Dispose();
                 }
 
                 return await _factory(_key, ct).ConfigureAwait(false);
@@ -107,18 +115,18 @@ internal sealed class HttpConnectionPool
 
         public void Return(HttpConnection connection)
         {
-            lock (_sync)
+            // Check expiry on return too: an expired connection must not sit in the pool until the next
+            // caller pops and discards it. Matches SocketsHttpHandler's CheckExpirationOnReturn.
+            if (!connection.IsReusable || connection.IsExpired(_idleTimeout) || connection.IsPastLifetime(_lifetime))
             {
-                if (connection.IsReusable)
-                {
-                    connection.MarkUsed();
-                    _idle.Push(connection);
-                    return; // keep the slot owned while the connection idles in the pool
-                }
+                connection.Dispose();
+                _semaphore?.Release();
+                return;
             }
 
-            connection.Dispose();
-            _semaphore?.Release();
+            connection.MarkUsed();
+            _idle.Push(connection);
+            // The semaphore slot stays owned while the connection idles in the pool.
         }
 
         private SemaphoreSlim GetSemaphore(int maxPerServer)
@@ -134,14 +142,9 @@ internal sealed class HttpConnectionPool
 
         public void Dispose()
         {
-            lock (_sync)
+            while (_idle.TryPop(out HttpConnection? connection))
             {
-                foreach (HttpConnection connection in _idle)
-                {
-                    connection.Dispose();
-                }
-
-                _idle.Clear();
+                connection.Dispose();
             }
         }
     }

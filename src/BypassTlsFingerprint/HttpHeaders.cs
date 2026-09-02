@@ -1,14 +1,19 @@
+using System.Collections.Frozen;
+
 namespace BypassTlsFingerprint;
 
 /// <summary>Shared, tiny helpers for the repeated HTTP header conventions of the transport.</summary>
 internal static class HttpHeaders
 {
-    private static readonly HashSet<string> ContentHeaders = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-    {
+    /// <summary>
+    /// RFC 7230 entity (content) headers. Used to route a parsed header to either the response's
+    /// <see cref="HttpContent.Headers"/> or its <see cref="HttpResponseMessage.Headers"/>.
+    /// </summary>
+    private static readonly FrozenSet<string> ContentHeaders = FrozenSet.Create(
+        StringComparer.OrdinalIgnoreCase,
         "Allow", "Content-Disposition", "Content-Encoding", "Content-Language",
         "Content-Length", "Content-Location", "Content-MD5", "Content-Range",
-        "Content-Type", "Expires", "Last-Modified",
-    };
+        "Content-Type", "Expires", "Last-Modified");
 
     public static bool IsContentHeader(string name)
     {

@@ -11,7 +11,7 @@ public static class ServiceCollectionExtensions
     /// <see cref="TlsFingerprint"/> (built with <see cref="TlsFingerprintBuilder"/>) to impersonate
     /// a different browser/version.
     /// </summary>
-    public static IHttpClientBuilder AddBypassHttpClient(
+    public static IHttpClientBuilder AddBypassTlsFingerprintHttpClient(
         this IServiceCollection services,
         TlsFingerprint fingerprint,
         Action<BypassTlsFingerprintMessageHandler>? configureHandler = null,

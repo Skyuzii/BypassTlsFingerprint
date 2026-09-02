@@ -29,6 +29,12 @@ public sealed class BypassTlsFingerprintMessageHandler : HttpMessageHandler
 
     public TimeSpan PooledConnectionIdleTimeout { get; set; } = TimeSpan.FromMinutes(1);
 
+    /// <summary>
+    /// Maximum lifetime a pooled connection can be reused for before it is closed, mirroring
+    /// <see cref="SocketsHttpHandler.PooledConnectionLifetime"/>. <see cref="TimeSpan.Zero"/> disables it.
+    /// </summary>
+    public TimeSpan PooledConnectionLifetime { get; set; } = TimeSpan.FromMinutes(2);
+
     /// <summary>Timeout applied to establishing a TCP connection. <see cref="TimeSpan.Zero"/> disables it.</summary>
     public TimeSpan ConnectTimeout { get; set; }
 
@@ -51,10 +57,17 @@ public sealed class BypassTlsFingerprintMessageHandler : HttpMessageHandler
     /// (<see cref="TlsFingerprintClient"/>) is constructed internally — consumers only describe the
     /// impersonation with a <see cref="TlsFingerprint"/>.
     /// </summary>
+    /// <remarks>
+    /// The connection pool is created here, so pool-shaping options (<see cref="PooledConnectionIdleTimeout"/>,
+    /// <see cref="PooledConnectionLifetime"/>) are captured at construction. Set them before creating the
+    /// handler (or before the first request when using <see cref="HttpClient"/>) — changing them later
+    /// has no effect on the existing pool. Per-request options (<see cref="AllowAutoRedirect"/>,
+    /// <see cref="AutomaticDecompression"/>, etc.) are read on every send.
+    /// </remarks>
     public BypassTlsFingerprintMessageHandler(TlsFingerprint fingerprint)
     {
         _tlsClient = new TlsFingerprintClient(new BcTlsCrypto(new SecureRandom()), fingerprint);
-        _pool = new HttpConnectionPool(PooledConnectionIdleTimeout, CreateConnectionAsync);
+        _pool = new HttpConnectionPool(PooledConnectionIdleTimeout, PooledConnectionLifetime, CreateConnectionAsync);
     }
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -74,27 +87,40 @@ public sealed class BypassTlsFingerprintMessageHandler : HttpMessageHandler
             ? null
             : await request.Content.ReadAsByteArrayAsync(cancellationToken);
 
-        return await SendWithRedirectsAsync(request, uri, body, redirectCount: 0, cancellationToken);
+        return await SendWithRedirectsAsync(request, uri, body, cancellationToken);
     }
 
     private async Task<HttpResponseMessage> SendWithRedirectsAsync(
         HttpRequestMessage request,
         Uri uri,
         byte[]? body,
-        int redirectCount,
         CancellationToken ct)
     {
-        HttpResponseMessage response = await SendSingleAsync(request, uri, body, ct);
+        HttpRequestMessage current = request;
+        Uri currentUri = uri;
 
-        if (!AllowAutoRedirect
-            || redirectCount >= MaxAutomaticRedirections
-            || !TryGetRedirect(request, response, out HttpRequestMessage? nextRequest, out Uri? nextUri, ref body))
+        for (var redirectCount = 0; ; redirectCount++)
         {
-            return response;
-        }
+            HttpResponseMessage response = await SendSingleAsync(current, currentUri, body, ct);
 
-        response.Dispose();
-        return await SendWithRedirectsAsync(nextRequest!, nextUri!, body, redirectCount + 1, ct);
+            if (!AllowAutoRedirect
+                || redirectCount >= MaxAutomaticRedirections
+                || !TryGetRedirect(current, response, out HttpRequestMessage? nextRequest, out Uri? nextUri, ref body))
+            {
+                return response;
+            }
+
+            // The redirect produced a new request message; dispose the intermediate response and the
+            // previous request (except the caller's original, which the caller owns).
+            response.Dispose();
+            if (redirectCount > 0)
+            {
+                current.Dispose();
+            }
+
+            current = nextRequest!;
+            currentUri = nextUri!;
+        }
     }
 
     private async Task<HttpResponseMessage> SendSingleAsync(HttpRequestMessage request, Uri uri, byte[]? body, CancellationToken ct)
@@ -121,7 +147,11 @@ public sealed class BypassTlsFingerprintMessageHandler : HttpMessageHandler
             HttpResponse parsed = await _httpResponseParser.Parse(connection.Stream, ct);
 
             // Return connection to the pool before cookie/decompression mapping; content is buffered anyway.
-            connection.IsReusable = IsConnectionReusable(parsed);
+            // Reusability is computed once at parse time from framing + Connection header.
+            if (!parsed.IsConnectionReusable)
+            {
+                connection.MarkNotReusable();
+            }
 
             ResponseMapper.AddCookies(parsed, uri, UseCookies, CookieContainer);
 
@@ -134,7 +164,7 @@ public sealed class BypassTlsFingerprintMessageHandler : HttpMessageHandler
         }
         catch
         {
-            connection.IsReusable = false;
+            connection.MarkNotReusable();
             throw;
         }
         finally
@@ -145,32 +175,49 @@ public sealed class BypassTlsFingerprintMessageHandler : HttpMessageHandler
 
     private async Task<HttpConnection> CreateConnectionAsync(Endpoint endpoint, CancellationToken ct)
     {
-        CancellationToken connectCt = WithConnectTimeout(ct);
-        var destination = new Uri($"{endpoint.Scheme}://{endpoint.Host}:{endpoint.Port}/");
-        TcpClient client;
-
-        if (!ProxyConnection.TryResolveProxy(destination, UseProxy, Proxy, out Uri? proxyAddress))
+        // The linked CTS applies ConnectTimeout; it is disposed once the connect (and any TLS handshake)
+        // completes so each connection attempt does not leak a timer-backed source.
+        CancellationTokenSource? connectCts = null;
+        CancellationToken connectCt = ct;
+        if (ConnectTimeout > TimeSpan.Zero)
         {
-            client = new TcpClient();
-            await client.ConnectAsync(endpoint.Host, endpoint.Port, connectCt);
-        }
-        else
-        {
-            ICredentials? credentials = DefaultProxyCredentials ?? Proxy?.Credentials;
-            client = await ProxyConnection.ConnectThroughProxyAsync(endpoint, proxyAddress!, credentials, connectCt);
+            connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            connectCts.CancelAfter(ConnectTimeout);
+            connectCt = connectCts.Token;
         }
 
-        Stream stream = client.GetStream();
-        if (endpoint.Scheme == Uri.UriSchemeHttps)
+        try
         {
-            _tlsClient.SetServerName(endpoint.Host);
+            var destination = new Uri($"{endpoint.Scheme}://{endpoint.Host}:{endpoint.Port}/");
+            TcpClient client;
 
-            var protocol = new TlsClientProtocol(stream);
-            protocol.Connect(_tlsClient);
-            stream = protocol.Stream;
+            if (!ProxyConnection.TryResolveProxy(destination, UseProxy, Proxy, out Uri? proxyAddress))
+            {
+                client = new TcpClient();
+                await client.ConnectAsync(endpoint.Host, endpoint.Port, connectCt);
+            }
+            else
+            {
+                ICredentials? credentials = DefaultProxyCredentials ?? Proxy?.Credentials;
+                client = await ProxyConnection.ConnectThroughProxyAsync(endpoint, proxyAddress!, credentials, connectCt);
+            }
+
+            Stream stream = client.GetStream();
+            if (endpoint.Scheme == Uri.UriSchemeHttps)
+            {
+                _tlsClient.SetServerName(endpoint.Host);
+
+                var protocol = new TlsClientProtocol(stream);
+                protocol.Connect(_tlsClient);
+                stream = protocol.Stream;
+            }
+
+            return new HttpConnection(client, stream, isTls: endpoint.Scheme == Uri.UriSchemeHttps, endpoint.Host);
         }
-
-        return new HttpConnection(client, stream, isTls: endpoint.Scheme == Uri.UriSchemeHttps, endpoint.Host);
+        finally
+        {
+            connectCts?.Dispose();
+        }
     }
 
     private bool TryGetRedirect(
@@ -243,38 +290,6 @@ public sealed class BypassTlsFingerprintMessageHandler : HttpMessageHandler
         }
 
         return uri.Scheme == Uri.UriSchemeHttps ? Port : 80;
-    }
-
-    private CancellationToken WithConnectTimeout(CancellationToken ct)
-    {
-        if (ConnectTimeout <= TimeSpan.Zero)
-        {
-            return ct;
-        }
-
-        var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(ConnectTimeout);
-        return cts.Token;
-    }
-
-    private static bool IsConnectionReusable(HttpResponse parsed)
-    {
-        bool knownFraming =
-            HttpHeaders.GetHeader(parsed.Headers, "Content-Length") is not null ||
-            HttpHeaders.GetHeader(parsed.Headers, "Transfer-Encoding") is not null;
-
-        if (!knownFraming)
-        {
-            return false;
-        }
-
-        string? connection = HttpHeaders.GetHeader(parsed.Headers, "Connection");
-        if (connection?.Contains("close", StringComparison.OrdinalIgnoreCase) == true)
-        {
-            return false;
-        }
-
-        return true;
     }
 
     protected override void Dispose(bool disposing)

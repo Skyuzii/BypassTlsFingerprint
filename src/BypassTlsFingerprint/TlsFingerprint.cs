@@ -4,7 +4,9 @@ namespace BypassTlsFingerprint;
 
 public sealed class TlsFingerprint
 {
-    /// <summary>TLS versions the ClientHello advertises, in preference order (JA3/JA4 "version").</summary>
+    /// <summary>
+    /// TLS versions the ClientHello advertises, in preference order (JA3/JA4 "version")
+    /// </summary>
     public required IReadOnlyList<ProtocolVersion> SupportedVersions { get; init; }
 
     /// <summary>

@@ -10,7 +10,7 @@ internal sealed class BypassTlsMessageHandlerOfflineTests
 {
     private static HttpClient CreateClient(Action<BypassTlsFingerprintMessageHandler>? configure = null)
     {
-        var handler = new BypassTlsFingerprintMessageHandler(TlsFingerprintProfiles.Mozilla.Firefox0);
+        var handler = new BypassTlsFingerprintMessageHandler(TlsFingerprints.Mozilla.Firefox0);
         handler.Proxy = null;
         configure?.Invoke(handler);
         return new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };

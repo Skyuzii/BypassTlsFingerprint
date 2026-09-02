@@ -1,12 +1,24 @@
+using System.Buffers;
+using System.Globalization;
 using System.Net;
 using System.Text;
 
 namespace BypassTlsFingerprint;
 
-/// <summary>Serializes the outbound HTTP/1.1 request head (request line + headers). The body is written
-/// separately by the caller so a full request body is never copied into a combined buffer.</summary>
+/// <summary>
+/// Serializes the outbound HTTP/1.1 request head (request line + headers) directly into a pooled byte
+/// buffer, avoiding the <c>StringBuilder</c>→<c>string</c>→<c>byte[]</c> triple allocation of the old
+/// implementation. The body is written separately by the caller so a full request body is never copied
+/// into a combined buffer.
+/// </summary>
 internal static class HttpRequestSerializer
 {
+    /// <summary>ASCII letters and digits written the most; we emit raw bytes to skip UTF-8 validation.</summary>
+    private const byte CR = (byte)'\r';
+    private const byte LF = (byte)'\n';
+    private const byte SP = (byte)' ';
+    private const byte COLON = (byte)':';
+
     public static byte[] BuildRequestHead(
         HttpRequestMessage request,
         Uri uri,
@@ -19,14 +31,25 @@ internal static class HttpRequestSerializer
         bool absoluteForm = viaProxy && uri.Scheme == Uri.UriSchemeHttp;
         string target = BuildRequestTarget(request, uri, absoluteForm);
 
-        // HTTP/1.1 mandates CRLF line endings — never Environment.NewLine (which is "\\n" on Unix).
-        var sb = new StringBuilder();
-        sb.Append(request.Method).Append(' ').Append(target).Append(" HTTP/1.1\r\n");
-        sb.Append("Host: ").Append(request.Headers.Host ?? uri.Host).Append("\r\n");
+        var writer = new ArrayBufferWriter<byte>(1024);
+
+        // Request line: "GET /path?query HTTP/1.1\r\n"
+        WriteAscii(writer, request.Method.Method);
+        writer.GetSpan(1)[0] = SP;
+        writer.Advance(1);
+        WriteAscii(writer, target);
+        WriteAscii(writer, " HTTP/1.1\r\n");
+
+        // Host header.
+        WriteAscii(writer, "Host: ");
+        WriteAscii(writer, request.Headers.Host ?? uri.Authority);
+        WriteCrlf(writer);
 
         if (automaticDecompression != DecompressionMethods.None)
         {
-            sb.Append("Accept-Encoding: ").Append(BuildAcceptEncoding(automaticDecompression)).Append("\r\n");
+            WriteAscii(writer, "Accept-Encoding: ");
+            WriteAcceptEncoding(writer, automaticDecompression);
+            WriteCrlf(writer);
         }
 
         foreach (KeyValuePair<string, IEnumerable<string>> header in request.Headers)
@@ -36,10 +59,7 @@ internal static class HttpRequestSerializer
                 continue;
             }
 
-            foreach (string value in header.Value)
-            {
-                sb.Append(header.Key).Append(": ").Append(value).Append("\r\n");
-            }
+            WriteHeader(writer, header.Key, header.Value);
         }
 
         if (useCookies && cookieContainer is not null)
@@ -47,13 +67,17 @@ internal static class HttpRequestSerializer
             string cookieHeader = cookieContainer.GetCookieHeader(uri);
             if (!string.IsNullOrEmpty(cookieHeader))
             {
-                sb.Append("Cookie: ").Append(cookieHeader).Append("\r\n");
+                WriteAscii(writer, "Cookie: ");
+                WriteAscii(writer, cookieHeader);
+                WriteCrlf(writer);
             }
         }
 
         if (body is not null)
         {
-            sb.Append("Content-Length: ").Append(body.Length).Append("\r\n");
+            WriteAscii(writer, "Content-Length: ");
+            WriteAscii(writer, body.Length.ToString(CultureInfo.InvariantCulture));
+            WriteCrlf(writer);
 
             foreach (KeyValuePair<string, IEnumerable<string>> header in request.Content!.Headers)
             {
@@ -62,16 +86,60 @@ internal static class HttpRequestSerializer
                     continue;
                 }
 
-                foreach (string value in header.Value)
-                {
-                    sb.Append(header.Key).Append(": ").Append(value).Append("\r\n");
-                }
+                WriteHeader(writer, header.Key, header.Value);
             }
         }
 
-        sb.Append("\r\n");
+        WriteCrlf(writer);
 
-        return Encoding.UTF8.GetBytes(sb.ToString());
+        return writer.WrittenSpan.ToArray();
+    }
+
+    private static void WriteHeader(ArrayBufferWriter<byte> writer, string name, IEnumerable<string> values)
+    {
+        // A header with multiple values is emitted as repeated "Name: value\r\n" lines — this is how
+        // HttpClient serializes multi-valued headers and what servers expect.
+        foreach (string value in values)
+        {
+            WriteAscii(writer, name);
+            writer.GetSpan(1)[0] = COLON;
+            writer.Advance(1);
+            writer.GetSpan(1)[0] = SP;
+            writer.Advance(1);
+            WriteAscii(writer, value);
+            WriteCrlf(writer);
+        }
+    }
+
+    private static void WriteAcceptEncoding(ArrayBufferWriter<byte> writer, DecompressionMethods encodings)
+    {
+        var first = true;
+        if ((encodings & DecompressionMethods.GZip) != 0)
+        {
+            WriteAscii(writer, "gzip");
+            first = false;
+        }
+
+        if ((encodings & DecompressionMethods.Deflate) != 0)
+        {
+            if (!first)
+            {
+                WriteAscii(writer, ", ");
+            }
+
+            WriteAscii(writer, "deflate");
+            first = false;
+        }
+
+        if ((encodings & DecompressionMethods.Brotli) != 0)
+        {
+            if (!first)
+            {
+                WriteAscii(writer, ", ");
+            }
+
+            WriteAscii(writer, "br");
+        }
     }
 
     private static string BuildRequestTarget(HttpRequestMessage request, Uri uri, bool absoluteForm)
@@ -85,24 +153,19 @@ internal static class HttpRequestSerializer
         return uri.PathAndQuery;
     }
 
-    private static string BuildAcceptEncoding(DecompressionMethods encodings)
+    private static void WriteAscii(ArrayBufferWriter<byte> writer, string value)
     {
-        var list = new List<string>();
-        if (encodings.HasFlag(DecompressionMethods.GZip))
-        {
-            list.Add("gzip");
-        }
+        int needed = Encoding.ASCII.GetByteCount(value);
+        Span<byte> span = writer.GetSpan(needed);
+        int written = Encoding.ASCII.GetBytes(value, span);
+        writer.Advance(written);
+    }
 
-        if (encodings.HasFlag(DecompressionMethods.Deflate))
-        {
-            list.Add("deflate");
-        }
-
-        if (encodings.HasFlag(DecompressionMethods.Brotli))
-        {
-            list.Add("br");
-        }
-
-        return list.Count == 0 ? "identity" : string.Join(", ", list);
+    private static void WriteCrlf(ArrayBufferWriter<byte> writer)
+    {
+        Span<byte> span = writer.GetSpan(2);
+        span[0] = CR;
+        span[1] = LF;
+        writer.Advance(2);
     }
 }

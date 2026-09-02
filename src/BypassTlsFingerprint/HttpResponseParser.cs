@@ -1,96 +1,154 @@
+using System.Globalization;
 using System.Text;
 
 namespace BypassTlsFingerprint;
 
+/// <summary>
+/// Parses a single raw HTTP/1.1 response from a stream: the head (status line + headers) via
+/// <see cref="HttpLineReader"/>, then the body framed by <c>Content-Length</c>,
+/// <c>Transfer-Encoding: chunked</c> (decoded), or close-delimited EOF. The body is buffered as raw
+/// bytes (binary preserved); headers keep wire order and may repeat (<c>Set-Cookie</c>).
+/// </summary>
 internal sealed class HttpResponseParser
 {
     public async Task<HttpResponse> Parse(Stream stream, CancellationToken cancellationToken)
     {
-        byte[] head = await HttpHeadReader.ReadHeadAsync(stream, cancellationToken);
+        // The reader is created per parse so its look-ahead buffer never leaks bytes from one response
+        // into the next on a pooled connection.
+        using var reader = new HttpLineReader(stream);
+        byte[] head = await reader.ReadHeadAsync(cancellationToken);
         (string httpVersion, int statusCode, List<KeyValuePair<string, string>> headers) = ParseHead(head);
 
-        var response = new HttpResponse
+        byte[] content = await ReadBodyAsync(reader, headers, cancellationToken);
+
+        return new HttpResponse
         {
             HttpVersion = httpVersion,
             StatusCode = statusCode,
+            Headers = headers,
+            Content = content,
+            IsConnectionReusable = ComputeReusability(headers),
         };
-        response.Headers.AddRange(headers);
-
-        response.Content = await ReadBodyAsync(stream, headers, cancellationToken);
-        return response;
     }
 
-    private static (string, int, List<KeyValuePair<string, string>>) ParseHead(byte[] head)
+    private static (string HttpVersion, int StatusCode, List<KeyValuePair<string, string>> Headers) ParseHead(byte[] head)
     {
-        string headText = Encoding.ASCII.GetString(head);
-        string[] lines = headText.TrimEnd('\r', '\n').Split('\n');
-        string[] statusParts = lines[0].TrimEnd('\r').Split(' ');
-
-        if (statusParts.Length < 2)
-        {
-            throw new HttpRequestException($"Invalid HTTP status line - '{lines[0]}'");
-        }
-
-        string httpVersion = statusParts[0];
-        if (!int.TryParse(statusParts[1], out int statusCode))
-        {
-            throw new HttpRequestException($"Invalid HTTP status code - '{statusParts[1]}'");
-        }
-
+        // Split the head into lines over the byte buffer without materializing one big string + Split.
         var headers = new List<KeyValuePair<string, string>>();
-        for (var i = 1; i < lines.Length; i++)
+        ReadOnlySpan<byte> span = head;
+
+        // The head ends with \r\n\r\n; strip the final blank line so the line walker stops cleanly.
+        int headEnd = span.Length - 4;
+        span = span[..headEnd];
+
+        // First line: status line.
+        int firstLf = span.IndexOf((byte)'\n');
+        ReadOnlySpan<byte> statusLine = firstLf < 0 ? span : span[..firstLf];
+        statusLine = statusLine.TrimEnd((byte)'\r');
+
+        (string httpVersion, int statusCode) = ParseStatusLine(statusLine);
+
+        if (firstLf >= 0)
         {
-            string line = lines[i].TrimEnd('\r');
-            if (line.Length == 0)
-            {
-                continue;
-            }
+            span = span[(firstLf + 1)..];
 
-            int colon = line.IndexOf(':');
-            if (colon < 1)
+            while (!span.IsEmpty)
             {
-                throw new HttpRequestException($"Response contains an invalid header - {line}");
-            }
+                int lf = span.IndexOf((byte)'\n');
+                ReadOnlySpan<byte> line = lf < 0 ? span : span[..lf];
+                line = line.TrimEnd((byte)'\r');
 
-            headers.Add(new KeyValuePair<string, string>(line[..colon].Trim(), line[(colon + 1)..].Trim()));
+                if (!line.IsEmpty)
+                {
+                    headers.Add(ParseHeaderLine(line));
+                }
+
+                if (lf < 0)
+                {
+                    break;
+                }
+
+                span = span[(lf + 1)..];
+            }
         }
 
         return (httpVersion, statusCode, headers);
     }
 
-    private static async Task<byte[]> ReadBodyAsync(
-        Stream stream,
-        List<KeyValuePair<string, string>> headers,
-        CancellationToken ct)
+    private static (string HttpVersion, int StatusCode) ParseStatusLine(ReadOnlySpan<byte> line)
+    {
+        // "HTTP/1.1 200 OK" — version, status code, optional reason phrase.
+        int firstSpace = line.IndexOf((byte)' ');
+        if (firstSpace <= 0)
+        {
+            throw new HttpRequestException($"Invalid HTTP status line - '{Encoding.ASCII.GetString(line)}'");
+        }
+
+        ReadOnlySpan<byte> version = line[..firstSpace];
+        ReadOnlySpan<byte> rest = line[(firstSpace + 1)..];
+
+        int secondSpace = rest.IndexOf((byte)' ');
+        ReadOnlySpan<byte> codeBytes = secondSpace < 0 ? rest : rest[..secondSpace];
+
+        if (!int.TryParse(codeBytes, CultureInfo.InvariantCulture, out int statusCode))
+        {
+            throw new HttpRequestException($"Invalid HTTP status code - '{Encoding.ASCII.GetString(codeBytes)}'");
+        }
+
+        return (Encoding.ASCII.GetString(version), statusCode);
+    }
+
+    private static KeyValuePair<string, string> ParseHeaderLine(ReadOnlySpan<byte> line)
+    {
+        int colon = line.IndexOf((byte)':');
+        if (colon <= 0)
+        {
+            throw new HttpRequestException($"Response contains an invalid header - '{Encoding.ASCII.GetString(line)}'");
+        }
+
+        ReadOnlySpan<byte> name = line[..colon];
+        ReadOnlySpan<byte> value = line[(colon + 1)..].Trim((byte)' ');
+        return new KeyValuePair<string, string>(Encoding.ASCII.GetString(name), Encoding.ASCII.GetString(value));
+    }
+
+    private static async Task<byte[]> ReadBodyAsync(HttpLineReader reader, List<KeyValuePair<string, string>> headers, CancellationToken ct)
     {
         string? transferEncoding = HttpHeaders.GetHeader(headers, "Transfer-Encoding");
 
         if (transferEncoding?.Contains("chunked", StringComparison.OrdinalIgnoreCase) == true)
         {
-            return await ReadChunkedBodyAsync(stream, ct);
+            return await ReadChunkedBodyAsync(reader, ct);
         }
 
         string? contentLength = HttpHeaders.GetHeader(headers, "Content-Length");
-        if (contentLength is not null && int.TryParse(contentLength, out int length) && length >= 0)
+        if (contentLength is not null && long.TryParse(contentLength, CultureInfo.InvariantCulture, out long length) && length >= 0)
         {
-            return length == 0 ? Array.Empty<byte>() : await ReadExactlyAsync(stream, length, ct);
+            return length == 0 ? Array.Empty<byte>() : await reader.ReadBytesAsync((int)length, ct);
         }
 
         // No length and no chunked: close-delimited body.
-        return await ReadToEndAsync(stream, ct);
+        return await reader.ReadUntilEofAsync(ct);
     }
 
-    private static async Task<byte[]> ReadChunkedBodyAsync(Stream stream, CancellationToken ct)
+    private static async Task<byte[]> ReadChunkedBodyAsync(HttpLineReader reader, CancellationToken ct)
     {
         using var body = new MemoryStream();
 
         while (true)
         {
-            string sizeLine = await ReadLineCoreAsync(stream, ct);
-            sizeLine = sizeLine.Contains(';') ? sizeLine[..sizeLine.IndexOf(';')] : sizeLine;
-            if (!int.TryParse(sizeLine.Trim(), System.Globalization.NumberStyles.HexNumber, provider: null, out int size))
+            byte[]? sizeLine = await reader.ReadLineAsync(ct);
+            if (sizeLine is null)
             {
-                throw new HttpRequestException($"Invalid chunk size - '{sizeLine}'");
+                throw new EndOfStreamException("Connection closed mid-chunked body.");
+            }
+
+            // Chunk extensions (";ext") are discarded — only the hex size matters.
+            int semi = sizeLine.AsSpan().IndexOf((byte)';');
+            ReadOnlySpan<byte> sizeSpan = semi < 0 ? sizeLine : sizeLine[..semi];
+
+            if (!long.TryParse(sizeSpan, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out long size))
+            {
+                throw new HttpRequestException($"Invalid chunk size - '{Encoding.ASCII.GetString(sizeSpan)}'");
             }
 
             if (size == 0)
@@ -98,8 +156,8 @@ internal sealed class HttpResponseParser
                 // Consume any trailer headers up to the terminating blank line ("0\r\n" + trailers + "\r\n").
                 while (true)
                 {
-                    string trailer = await ReadLineCoreAsync(stream, ct);
-                    if (trailer.Length == 0)
+                    byte[]? trailer = await reader.ReadLineAsync(ct);
+                    if (trailer is null || trailer.Length == 0)
                     {
                         break;
                     }
@@ -108,75 +166,37 @@ internal sealed class HttpResponseParser
                 break;
             }
 
-            byte[] chunk = await ReadExactlyAsync(stream, size, ct);
+            byte[] chunk = await reader.ReadBytesAsync((int)size, ct);
             await body.WriteAsync(chunk, ct);
 
-            _ = await ReadExactlyAsync(stream, count: 2, ct);
+            // Each chunk is followed by CRLF.
+            await reader.SkipBytesAsync(count: 2, ct);
         }
 
         return body.ToArray();
     }
 
-    private static async Task<string> ReadLineCoreAsync(Stream stream, CancellationToken ct)
+    /// <summary>
+    /// A connection is reusable only when the response framing is known (Content-Length or chunked) and
+    /// the server did not signal <c>Connection: close</c>. Mirrors SocketsHttpHandler's keep-alive logic.
+    /// </summary>
+    private static bool ComputeReusability(List<KeyValuePair<string, string>> headers)
     {
-        var sb = new StringBuilder();
-        var one = new byte[1];
+        bool knownFraming =
+            HttpHeaders.GetHeader(headers, "Content-Length") is not null ||
+            HttpHeaders.GetHeader(headers, "Transfer-Encoding") is not null;
 
-        while (true)
+        if (!knownFraming)
         {
-            int n = await stream.ReadAsync(one, ct);
-            if (n == 0)
-            {
-                break;
-            }
-
-            if (one[0] == (byte)'\n')
-            {
-                break;
-            }
-
-            if (one[0] != (byte)'\r')
-            {
-                sb.Append((char)one[0]);
-            }
+            return false;
         }
 
-        return sb.ToString();
-    }
-
-    private static async Task<byte[]> ReadExactlyAsync(Stream stream, int count, CancellationToken ct)
-    {
-        var buffer = new byte[count];
-        var total = 0;
-        while (total < count)
+        string? connection = HttpHeaders.GetHeader(headers, "Connection");
+        if (connection?.Contains("close", StringComparison.OrdinalIgnoreCase) == true)
         {
-            int read = await stream.ReadAsync(buffer.AsMemory(total), ct);
-            if (read == 0)
-            {
-                throw new EndOfStreamException("Connection closed before the response body was fully read.");
-            }
-
-            total += read;
+            return false;
         }
 
-        return buffer;
-    }
-
-    private static async Task<byte[]> ReadToEndAsync(Stream stream, CancellationToken ct)
-    {
-        using var body = new MemoryStream();
-        var buffer = new byte[8192];
-        while (true)
-        {
-            int read = await stream.ReadAsync(buffer, ct);
-            if (read == 0)
-            {
-                break;
-            }
-
-            await body.WriteAsync(buffer.AsMemory(start: 0, read), ct);
-        }
-
-        return body.ToArray();
+        return true;
     }
 }

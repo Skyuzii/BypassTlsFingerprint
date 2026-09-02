@@ -10,7 +10,7 @@ internal sealed class BypassTlsMessageHandlerAdvancedTests
 {
     private static HttpClient CreateClient(Action<BypassTlsFingerprintMessageHandler>? configure = null)
     {
-        var handler = new BypassTlsFingerprintMessageHandler(TlsFingerprintProfiles.Mozilla.Firefox0);
+        var handler = new BypassTlsFingerprintMessageHandler(TlsFingerprints.Mozilla.Firefox0);
         // Disable proxying by default so tests are hermetic; proxy tests opt in via the configure callback.
         handler.Proxy = null;
         configure?.Invoke(handler);

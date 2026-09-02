@@ -5,6 +5,7 @@ namespace BypassTlsFingerprint;
 internal sealed class HttpConnection : IDisposable
 {
     private readonly TcpClient _client;
+    private readonly long _createdTicks;
     private long _lastUsedTicks;
 
     public Stream Stream { get; }
@@ -13,7 +14,7 @@ internal sealed class HttpConnection : IDisposable
 
     public string Host { get; }
 
-    public bool IsReusable { get; set; } = true;
+    public bool IsReusable { get; private set; } = true;
 
     public HttpConnection(TcpClient client, Stream httpStream, bool isTls, string host)
     {
@@ -21,7 +22,13 @@ internal sealed class HttpConnection : IDisposable
         Stream = new BufferedStream(httpStream, bufferSize: 8192);
         IsTls = isTls;
         Host = host;
+        _createdTicks = Environment.TickCount64;
         MarkUsed();
+    }
+
+    public void MarkNotReusable()
+    {
+        IsReusable = false;
     }
 
     public void MarkUsed()
@@ -32,6 +39,11 @@ internal sealed class HttpConnection : IDisposable
     public bool IsExpired(TimeSpan idleTimeout)
     {
         return idleTimeout > TimeSpan.Zero && Environment.TickCount64 - _lastUsedTicks > (long)idleTimeout.TotalMilliseconds;
+    }
+
+    public bool IsPastLifetime(TimeSpan lifetime)
+    {
+        return lifetime > TimeSpan.Zero && Environment.TickCount64 - _createdTicks > (long)lifetime.TotalMilliseconds;
     }
 
     public void Dispose()

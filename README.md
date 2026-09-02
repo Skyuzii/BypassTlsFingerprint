@@ -22,7 +22,7 @@ This library can, which is what many anti-bot services check.
 using BypassTlsFingerprint;
 
 // 1. Shipped Firefox profile
-var handler = new BypassTlsMessageHandler(TlsFingerprintProfiles.Mozilla.Firefox0);
+var handler = new BypassTlsFingerprintMessageHandler(TlsFingerprints.Mozilla.Firefox0);
 using var client = new HttpClient(handler);
 string body = await client.GetStringAsync("https://example.com/");
 ```
@@ -40,7 +40,7 @@ var fp = new TlsFingerprintBuilder()
     .AddExtension(ExtensionType.signature_algorithms, new byte[] { ... })
     .Build();
 
-var handler = new BypassTlsMessageHandler(fp);
+var handler = new BypassTlsFingerprintMessageHandler(fp);
 ```
 
 Extension order = `AddExtension` call order (keep it faithful to the target build). If no `server_name`
@@ -50,17 +50,22 @@ extension is added, the builder adds one first.
 // 3. DI
 using BypassTlsFingerprint.Extensions;
 
-services.AddBypassHttpClient(
-    TlsFingerprintProfiles.Mozilla.Firefox0,
+services.AddBypassTlsFingerprintHttpClient(
+    TlsFingerprints.Mozilla.Firefox0,
     handler => handler.MaxConnectionsPerServer = 8);
 ```
 
 ## Configuration
 
-`BypassTlsMessageHandler` mirrors `HttpClientHandler`/`SocketsHttpHandler` options: `Port`,
-`AllowAutoRedirect`/`MaxAutomaticRedirections`, `UseCookies`/`CookieContainer`, `UseProxy`/`Proxy`
-(`IWebProxy`, defaults to `HttpClient.DefaultProxy`)/`DefaultProxyCredentials`,
-`AutomaticDecompression`, `MaxConnectionsPerServer`, `PooledConnectionIdleTimeout`, `ConnectTimeout`.
+`BypassTlsFingerprintMessageHandler` mirrors `HttpClientHandler`/`SocketsHttpHandler` options: 
+- `Port`,
+- `AllowAutoRedirect`/`MaxAutomaticRedirections`
+- `UseCookies`/`CookieContainer`,
+- `UseProxy`/`Proxy`
+- `AutomaticDecompression`
+- `MaxConnectionsPerServer`
+- `PooledConnectionIdleTimeout`
+- `ConnectTimeout`
 
 ## Security
 

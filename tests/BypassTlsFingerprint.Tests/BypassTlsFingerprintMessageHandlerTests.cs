@@ -6,7 +6,7 @@ internal sealed class BypassTlsFingerprintMessageHandlerTests
 
     private static BypassTlsFingerprintMessageHandler CreateHandler(Action<BypassTlsFingerprintMessageHandler>? configure = null)
     {
-        var handler = new BypassTlsFingerprintMessageHandler(TlsFingerprintProfiles.Mozilla.Firefox0);
+        var handler = new BypassTlsFingerprintMessageHandler(TlsFingerprints.Mozilla.Firefox0);
         configure?.Invoke(handler);
         return handler;
     }
