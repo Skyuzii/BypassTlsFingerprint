@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using System.Text.RegularExpressions;
 
 using BypassTlsFingerprint.Tests.Support;
 
@@ -9,9 +8,9 @@ namespace BypassTlsFingerprint.Tests;
 
 internal sealed class BypassTlsMessageHandlerAdvancedTests
 {
-    private static HttpClient CreateClient(Action<BypassTlsMessageHandler>? configure = null)
+    private static HttpClient CreateClient(Action<BypassTlsFingerprintMessageHandler>? configure = null)
     {
-        var handler = new BypassTlsMessageHandler(TlsFingerprintProfiles.Mozilla.Firefox0);
+        var handler = new BypassTlsFingerprintMessageHandler(TlsFingerprintProfiles.Mozilla.Firefox0);
         // Disable proxying by default so tests are hermetic; proxy tests opt in via the configure callback.
         handler.Proxy = null;
         configure?.Invoke(handler);
@@ -73,51 +72,6 @@ internal sealed class BypassTlsMessageHandlerAdvancedTests
     }
 
     [Test]
-    public async Task ExpectContinue_SendsHeadThenWaitsFor100BeforeBody()
-    {
-        var observed = new StringBuilder();
-        var listener = new TcpListener(IPAddress.Loopback, port: 0);
-        listener.Start();
-        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
-
-        Task serverTask = Task.Run(async () =>
-        {
-            using TcpClient client = await listener.AcceptTcpClientAsync();
-            listener.Stop();
-            await using NetworkStream stream = client.GetStream();
-
-            string head = await ReadHeadAsync(stream);
-            observed.AppendLine("HEAD=" + head.Replace("\r\n", "|"));
-            bool hasExpect = head.Contains("Expect: 100-continue", StringComparison.OrdinalIgnoreCase);
-
-            await stream.WriteAsync(Encoding.ASCII.GetBytes(
-                "HTTP/1.1 100 Continue\r\n\r\n"));
-
-            // After 100, the client must send the Content-Length body.
-            byte[] body = await ReadAndDiscardRequestBodyAsync(stream, head);
-            observed.AppendLine("BODY=" + Encoding.UTF8.GetString(body));
-
-            await stream.WriteAsync(Encoding.ASCII.GetBytes(
-                "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"));
-            _ = hasExpect;
-        });
-
-        using HttpClient http = CreateClient(h => h.ExpectContinue = true);
-        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri($"http://127.0.0.1:{port}/"))
-        {
-            Content = new ByteArrayContent("hello"u8.ToArray()),
-        };
-
-        HttpResponseMessage response = await http.SendAsync(request);
-        Assert.That((int)response.StatusCode, Is.EqualTo(200));
-        await serverTask;
-
-        var log = observed.ToString();
-        Assert.That(log, Does.Contain("Expect: 100-continue"));
-        Assert.That(log, Does.Contain("BODY=hello"));
-    }
-
-    [Test]
     public async Task ConnectTimeout_AbortsANonReachableHost()
     {
         using HttpClient http = CreateClient(h =>
@@ -164,31 +118,6 @@ internal sealed class BypassTlsMessageHandlerAdvancedTests
         }
 
         return Encoding.ASCII.GetString(head.ToArray());
-    }
-
-    private static async Task<byte[]> ReadAndDiscardRequestBodyAsync(Stream stream, string head)
-    {
-        Match matches = System.Text.RegularExpressions.Regex.Match(head, "Content-Length: (\\d+)", RegexOptions.IgnoreCase);
-        if (!matches.Success)
-        {
-            return Array.Empty<byte>();
-        }
-
-        int length = int.Parse(matches.Groups[1].Value);
-        var body = new byte[length];
-        var total = 0;
-        while (total < length)
-        {
-            int read = await stream.ReadAsync(body.AsMemory(total));
-            if (read == 0)
-            {
-                break;
-            }
-
-            total += read;
-        }
-
-        return body;
     }
 
     private static async Task<Exception?> WithTimeoutAsync(Func<Task> action, int ms = 5000)

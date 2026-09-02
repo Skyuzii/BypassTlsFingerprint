@@ -19,7 +19,7 @@ internal sealed class TlsFingerprintBuilderTests
             .AddExtension(ExtensionType.record_size_limit, new byte[] { 64, 0 })
             .Build();
 
-        var handler = new BypassTlsMessageHandler(fingerprint);
+        var handler = new BypassTlsFingerprintMessageHandler(fingerprint);
         handler.Proxy = null; // keep the test hermetic (offline)
 
         await using FakeHttpServer server = FakeHttpServer.StartTls((_, _) => Task.FromResult(

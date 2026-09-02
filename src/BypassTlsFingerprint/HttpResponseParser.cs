@@ -2,11 +2,11 @@ using System.Text;
 
 namespace BypassTlsFingerprint;
 
-public sealed class HttpResponseParser
+internal sealed class HttpResponseParser
 {
     public async Task<HttpResponse> Parse(Stream stream, CancellationToken cancellationToken)
     {
-        byte[] head = await ReadHeadAsync(stream, cancellationToken);
+        byte[] head = await HttpHeadReader.ReadHeadAsync(stream, cancellationToken);
         (string httpVersion, int statusCode, List<KeyValuePair<string, string>> headers) = ParseHead(head);
 
         var response = new HttpResponse
@@ -18,36 +18,6 @@ public sealed class HttpResponseParser
 
         response.Content = await ReadBodyAsync(stream, headers, cancellationToken);
         return response;
-    }
-
-    private static async Task<byte[]> ReadHeadAsync(Stream stream, CancellationToken ct)
-    {
-        var head = new List<byte>(1024);
-        var one = new byte[1];
-
-        while (true)
-        {
-            int n = await stream.ReadAsync(one, ct);
-            if (n == 0)
-            {
-                break; // connection closed; parse whatever head was received
-            }
-
-            head.Add(one[0]);
-            if (head.Count >= 4 &&
-                head[^4] == (byte)'\r' && head[^3] == (byte)'\n' &&
-                head[^2] == (byte)'\r' && head[^1] == (byte)'\n')
-            {
-                break;
-            }
-        }
-
-        if (head.Count == 0)
-        {
-            throw new EndOfStreamException("Connection closed before the response head.");
-        }
-
-        return head.ToArray();
     }
 
     private static (string, int, List<KeyValuePair<string, string>>) ParseHead(byte[] head)
@@ -93,14 +63,14 @@ public sealed class HttpResponseParser
         List<KeyValuePair<string, string>> headers,
         CancellationToken ct)
     {
-        string? transferEncoding = GetHeader(headers, "Transfer-Encoding");
+        string? transferEncoding = HttpHeaders.GetHeader(headers, "Transfer-Encoding");
 
         if (transferEncoding?.Contains("chunked", StringComparison.OrdinalIgnoreCase) == true)
         {
             return await ReadChunkedBodyAsync(stream, ct);
         }
 
-        string? contentLength = GetHeader(headers, "Content-Length");
+        string? contentLength = HttpHeaders.GetHeader(headers, "Content-Length");
         if (contentLength is not null && int.TryParse(contentLength, out int length) && length >= 0)
         {
             return length == 0 ? Array.Empty<byte>() : await ReadExactlyAsync(stream, length, ct);
@@ -116,7 +86,7 @@ public sealed class HttpResponseParser
 
         while (true)
         {
-            string sizeLine = await ReadLineAsync(stream, ct);
+            string sizeLine = await ReadLineCoreAsync(stream, ct);
             sizeLine = sizeLine.Contains(';') ? sizeLine[..sizeLine.IndexOf(';')] : sizeLine;
             if (!int.TryParse(sizeLine.Trim(), System.Globalization.NumberStyles.HexNumber, provider: null, out int size))
             {
@@ -128,7 +98,7 @@ public sealed class HttpResponseParser
                 // Consume any trailer headers up to the terminating blank line ("0\r\n" + trailers + "\r\n").
                 while (true)
                 {
-                    string trailer = await ReadLineAsync(stream, ct);
+                    string trailer = await ReadLineCoreAsync(stream, ct);
                     if (trailer.Length == 0)
                     {
                         break;
@@ -145,11 +115,6 @@ public sealed class HttpResponseParser
         }
 
         return body.ToArray();
-    }
-
-    private static Task<string> ReadLineAsync(Stream stream, CancellationToken ct)
-    {
-        return ReadLineCoreAsync(stream, ct);
     }
 
     private static async Task<string> ReadLineCoreAsync(Stream stream, CancellationToken ct)
@@ -213,18 +178,5 @@ public sealed class HttpResponseParser
         }
 
         return body.ToArray();
-    }
-
-    private static string? GetHeader(List<KeyValuePair<string, string>> headers, string name)
-    {
-        foreach (KeyValuePair<string, string> header in headers)
-        {
-            if (string.Equals(header.Key, name, StringComparison.OrdinalIgnoreCase))
-            {
-                return header.Value;
-            }
-        }
-
-        return null;
     }
 }

@@ -6,7 +6,7 @@ public static class TlsFingerprintProfiles
 {
     public static class Mozilla
     {
-        public static TlsFingerprint Firefox0 = new TlsFingerprintBuilder()
+        public static readonly TlsFingerprint Firefox0 = new TlsFingerprintBuilder()
             .WithVersions(TlsVersions.Tls10, TlsVersions.Tls11, TlsVersions.Tls12)
             .WithCipherSuites(49195, 49199, 52393, 52392, 49196, 49200, 49162, 49161, 49171, 49172, 156, 157, 47, 53)
             .WithAlpn("http/1.1")

@@ -5,12 +5,18 @@ using Org.BouncyCastle.Tls.Crypto;
 
 namespace BypassTlsFingerprint;
 
-internal sealed class CustomTlsClient : DefaultTlsClient
+/// <summary>
+/// A BouncyCastle TLS client that impersonates a browser's JA3/JA4 fingerprint. It is driven entirely by
+/// the <see cref="TlsFingerprint"/> data passed to it — there is no per-browser subclass. Internal plumbing
+/// behind <see cref="BypassTlsFingerprintMessageHandler"/>: consumers describe the impersonation with a
+/// <see cref="TlsFingerprint"/>, never with this class.
+/// </summary>
+internal sealed class TlsFingerprintClient : DefaultTlsClient
 {
     private readonly TlsFingerprint _fingerprint;
     private readonly IDictionary<int, byte[]> _clientExtensions;
 
-    internal CustomTlsClient(TlsCrypto crypto, TlsFingerprint fingerprint) : base(crypto)
+    internal TlsFingerprintClient(TlsCrypto crypto, TlsFingerprint fingerprint) : base(crypto)
     {
         _fingerprint = fingerprint;
 
@@ -47,19 +53,19 @@ internal sealed class CustomTlsClient : DefaultTlsClient
 
     protected override ProtocolVersion[] GetSupportedVersions()
     {
-        return _fingerprint.SupportedVersions;
+        return _fingerprint.SupportedVersions.ToArray();
     }
 
     public override int[] GetCipherSuites()
     {
-        return _fingerprint.CipherSuites;
+        return _fingerprint.CipherSuites.ToArray();
     }
 
     public override IDictionary<int, byte[]> GetClientExtensions()
     {
         if (!_clientExtensions.TryGetValue(ExtensionType.server_name, out byte[]? serverName) || serverName.Length == 0)
         {
-            throw new ArgumentNullException("ServerName", "ServerName must be set");
+            throw new InvalidOperationException("ServerName is not set; call SetServerName before the handshake.");
         }
 
         return _clientExtensions;

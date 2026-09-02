@@ -5,13 +5,13 @@ namespace BypassTlsFingerprint;
 public sealed class TlsFingerprint
 {
     /// <summary>TLS versions the ClientHello advertises, in preference order (JA3/JA4 "version").</summary>
-    public required ProtocolVersion[] SupportedVersions { get; init; }
+    public required IReadOnlyList<ProtocolVersion> SupportedVersions { get; init; }
 
     /// <summary>
     /// Cipher suites, in exact ClientHello order (order and count are part of both JA3 and JA4).
     /// GREASE values, if any, are plain numbers here just like real suites.
     /// </summary>
-    public required int[] CipherSuites { get; init; }
+    public required IReadOnlyList<int> CipherSuites { get; init; }
 
     /// <summary>
     /// The ALPN protocol the client advertises and negotiates (JA4 stores this explicitly). The
